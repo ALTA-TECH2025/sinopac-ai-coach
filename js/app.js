@@ -531,7 +531,9 @@ function saveEditScenario() {
     if (!chosen.includes(g.diff)) errors.push(`第 ${i + 1} 組 Agent 的難度「${DIFF[g.diff] ? DIFF[g.diff].cn : g.diff}」不在此場景的難度集合內`);
     if (g.embed.trim() && !/^https:\/\//i.test(embedSrc(g.embed))) errors.push(`第 ${i + 1} 組 Agent 的 iframe 須含 https:// 開頭的 src`);
     if (g.status === 'on' && !g.embed.trim()) errors.push(`第 ${i + 1} 組 Agent 已啟用但尚未貼入 iframe`);
+    if (g.agentRef) { const a = agentById(g.agentRef); if (!a) errors.push(`第 ${i + 1} 組 Agent 對應的 AltaBots App 已不存在，請重新選擇`); else if (g.status === 'on' && a.status !== 'on') errors.push(`第 ${i + 1} 組 Agent「${a.name}」在對應清單為停用，不能啟用`); else if (g.status === 'on' && !(a.roles || []).length) errors.push(`第 ${i + 1} 組 Agent「${a.name}」沒有任何可用角色`); }
   });
+  if (d.eval.agentRef) { const a = agentById(d.eval.agentRef); if (!a) errors.push('評估 Agent 對應的 AltaBots App 已不存在，請重新選擇'); else if (a.status !== 'on') errors.push(`評估 Agent「${a.name}」在對應清單為停用`); }
   if (errors.length) { e.error = errors.join('；'); render(); return; }
   const diffs = d.diffs.split(',').map(x => x.trim()).filter(k => DIFF[k]);
   const personas = d.personas.map((p, i) => ({ id: p.id, name: p.name.trim(), en: p.en || '', init: personaInit(p.name), col: p.col || PALETTE[i % PALETTE.length], risk: (p.risk || '').trim(), mood: (p.mood || '').trim(), temper: (p.temper || '').trim(), diff: diffs.includes(p.diff) ? p.diff : diffs[0] }));
@@ -539,7 +541,7 @@ function saveEditScenario() {
   const first = agents.find(g => g.status === 'on') || agents[0];
   const scenarioPatch = { cn: d.cn.trim(), en: d.en.trim(), desc: d.desc.trim(), cat: d.cat, catCn: CAT_LABEL[d.cat] || '', duration: d.duration.trim(),
     diffs: diffs.length ? diffs : catDiffs(d.cat), youRoleCn: d.youRoleCn.trim(), personas };
-  const ev = { name: String(d.eval.name || '').trim(), schema: SCHEMAS[d.eval.schema] ? d.eval.schema : Object.keys(SCHEMAS)[0], workflow: String(d.eval.workflow || '').trim(), timeoutSec: Math.max(5, Number(d.eval.timeoutSec) || 60), pass: d.eval.pass === 'score' ? 'score' : 'signal', passScore: Math.max(0, Math.min(100, Number(d.eval.passScore) || 70)), veto: !!d.eval.veto };
+  const ev = { name: String(d.eval.name || '').trim(), agentRef: d.eval.agentRef || '', schema: SCHEMAS[d.eval.schema] ? d.eval.schema : Object.keys(SCHEMAS)[0], workflow: String(d.eval.workflow || '').trim(), timeoutSec: Math.max(5, Number(d.eval.timeoutSec) || 60), pass: d.eval.pass === 'score' ? 'score' : 'signal', passScore: Math.max(0, Math.min(100, Number(d.eval.passScore) || 70)), veto: !!d.eval.veto };
   const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agents, agent: first ? first.name : '', embed: first ? first.embed : '', eval: ev };
   let sc, meta, isNew = false;
   if (e.id) { sc = scenarioById(e.id); meta = SCENARIO_META[e.id]; }
@@ -603,10 +605,14 @@ function viewEditScenarioModal() {
         <label class="field"><span>客戶畫像</span><select data-field="agents.${i}.personaId">${d.personas.map(x => opt(x.id, g.personaId, x.name || '未命名畫像')).join('')}</select></label>
         <label class="field"><span>難度</span><select data-field="agents.${i}.diff">${diffOpts.map(k => opt(k, g.diff, DIFF[k].cn)).join('')}</select></label>
         <label class="field"><span>狀態</span><select data-field="agents.${i}.status">${opt('on', g.status, '已啟用')}${opt('off', g.status, '未啟用')}</select></label>
+        ${(() => { const ls = agentLinkState(g); const pool = AGENTS.filter(a => a.kind === 'drill' && !a.missing); const same = pool.filter(a => a.cat === d.cat), other = pool.filter(a => a.cat !== d.cat);
+          const o = a => `<option value="${esc(a.id)}" ${g.agentRef === a.id ? 'selected' : ''} ${a.status !== 'on' ? 'disabled' : ''}>${esc(a.name)}${a.status !== 'on' ? '（停用）' : ''}${!(a.roles || []).length ? '（無可用角色）' : ''}</option>`;
+          return `<label class="field full"><span>AltaBots Agent（對應清單）</span><select data-field="agents.${i}.agentRef"><option value="">— 手動貼入 iframe —</option>${same.length ? `<optgroup label="${esc(CATS[d.cat] ? CATS[d.cat].short : d.cat)}">${same.map(o).join('')}</optgroup>` : ''}${other.length ? `<optgroup label="其他場景類型">${other.map(o).join('')}</optgroup>` : ''}</select>
+            <small style="color:${ls.level === 'ok' ? '#1E9E63' : ls.level === 'bad' ? 'var(--red)' : ls.level === 'unlinked' ? '#E0882E' : 'var(--muted)'}">${ls.a ? `${ls.level === 'ok' ? '已對應' : '⚠ ' + esc(ls.text)}${ls.level === 'ok' ? '・' + esc(ls.text) : ''}` : ls.level === 'unlinked' ? '⚠ ' + esc(ls.text) : '從成員權限 › Agent 對應 同步的清單中選擇，會自動帶入名稱與嵌入網址'}</small></label>`; })()}
         <label class="field full"><span>Agent 名稱</span><input data-field="agents.${i}.name" value="${esc(g.name)}" placeholder="例：altabots · 信貸電銷對練 Agent · 複訪 A1 · L2"></label>
         <label class="field full"><span>iframe 嵌入代碼 <b>${g.status === 'on' ? '*' : ''}</b></span>
-          <textarea data-field="agents.${i}.embed" rows="2" class="mono" placeholder='<iframe src="https://agent.sinopac.ai/altabots/app/.../embed" allow="microphone; autoplay"></iframe>'>${esc(g.embed)}</textarea>
-          <small>${src ? `解析到 src：${esc(src)}` : '貼入 altabots 開發空間提供的嵌入代碼；系統只保留 src。'}</small></label>
+          <textarea data-field="agents.${i}.embed" rows="2" class="mono" ${g.agentRef ? 'readonly' : ''} placeholder='<iframe src="https://agent.sinopac.ai/altabots/app/.../embed" allow="microphone; autoplay"></iframe>'>${esc(g.embed)}</textarea>
+          <small>${g.agentRef ? '由對應清單帶入；要改網址請到 Agent 對應編輯，或改選「手動貼入」' : src ? `解析到 src：${esc(src)}` : '貼入 altabots 開發空間提供的嵌入代碼；系統只保留 src。'}</small></label>
       </div></div>`;
   }).join('');
   return `<div class="modal-bg" data-act="cancelscn">
@@ -634,6 +640,8 @@ function viewEditScenarioModal() {
       ${agentRows || '<div class="card empty" style="padding:16px">尚未配置 Agent，按「新增 Agent」。</div>'}
       <div class="agents-hd"><div><b>評估 Agent（評分 workflow）</b><small>對練結束後由此 Agent 依評分規則出分；評分規則預設跟著場景類型（參數設定），可另選；逾時未回應會標記為暫無評分，可在對練記錄重新觸發。</small></div></div>
       <div class="agent-row"><div class="form-grid agent-grid">
+        ${(() => { const pool = AGENTS.filter(a => a.kind === 'eval' && !a.missing); const cur = d.eval.agentRef ? agentById(d.eval.agentRef) : agentForWorkflow(d.eval.workflow);
+          return `<label class="field full"><span>AltaBots 評估 Agent（對應清單）</span><select data-field="eval.agentRef"><option value="">— 手動輸入 —</option>${pool.map(a => `<option value="${esc(a.id)}" ${cur && cur.id === a.id ? 'selected' : ''} ${a.status !== 'on' ? 'disabled' : ''}>${esc(a.name)}${CATS[a.cat] ? `（${esc(CATS[a.cat].short)}）` : ''}${a.status !== 'on' ? '（停用）' : ''}</option>`).join('')}</select><small>${cur ? (cur.status === 'on' ? `已對應・${esc(cur.workflow)}` : '⚠ 此評估 Agent 在對應清單為停用') : '選擇後自動帶入名稱與 workflow'}</small></label>`; })()}
         <label class="field full-2"><span>評估 Agent 名稱</span><input data-field="eval.name" value="${esc(d.eval.name)}" placeholder="altabots · 信貸評估 Agent"></label>
         <label class="field"><span>評分規則</span><select data-field="eval.schema">${Object.keys(SCHEMAS).map(k => opt(k, d.eval.schema, SCHEMAS[k].name)).join('')}</select></label>
         <label class="field full-2"><span>workflow／端點</span><input data-field="eval.workflow" class="mono" value="${esc(d.eval.workflow)}" placeholder="wf_credit_eval 或 https://…"></label>
@@ -810,6 +818,92 @@ function apiSync() {
   S.dlg.result = `已自 altabots 同步 ${n} 位成員（示範，未實際呼叫 API）。角色依 16.2 對應表映射。`; S.dlg.error = null; render();
 }
 
+/* ------------------------------------------------------------------ 角色與 Agent 對應清單：自 AltaBots.ai 工作空間同步 */
+const ALTABOTS_APPS_API = 'https://altabots.sinopac.ai/api/v1/workspaces/sinopac-drill/apps';
+const LS_AGENTS = 'sinopac-coach.agents';
+const AGENTS = [];              // { id, name, kind: 'drill'|'eval', src, workflow, cat, roles: [roleCode], status: 'on'|'off', synced, source: 'altabots'|'local' }
+const ROLE_BYPASS = ['OWNER', 'ADMIN'];   // 系統擁有者／管理員不受 Agent 角色限制
+const agentById = id => AGENTS.find(a => a.id === id) || null;
+function agentForSrc(src) { if (!src) return null; const norm = x => String(x || '').replace(/\/+$/, ''); return AGENTS.find(a => a.kind === 'drill' && norm(a.src) === norm(src)) || null; }
+function agentForWorkflow(wf) { if (!wf) return null; return AGENTS.find(a => a.kind === 'eval' && (a.workflow === wf || a.src === wf)) || null; }
+/* 場景裡哪些 Agent 組／評估設定用到這個對應項 */
+function agentUsage(a) {
+  const out = [];
+  SCENARIOS.forEach(sc => {
+    if (a.kind === 'drill') ensureAgents(sc.id).forEach(g => { if (g.agentRef === a.id || (!g.agentRef && agentForSrc(embedSrc(g.embed)) === a)) out.push({ sc, g }); });
+    else { const ev = ensureEval(sc.id); if (ev && (ev.agentRef === a.id || (!ev.agentRef && agentForWorkflow(ev.workflow) === a))) out.push({ sc, ev }); }
+  });
+  return out;
+}
+function roleCanUseAgent(roleCode, a) { if (!a) return true; if (ROLE_BYPASS.includes(roleCode)) return true; return (a.roles || []).includes(roleCode); }
+function nowStr() { const d = new Date(); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+/* 模擬 AltaBots 工作空間回傳的 App 清單：每個場景的對練 Agent（客戶畫像 × 難度）與評估 Agent 各一個 App，角色依場景類型映射（16.2） */
+function altabotsAppsSnapshot() {
+  const rolesFor = cat => cat === 'service' ? ['ADVISOR_JR', 'TRAINER', 'MANAGER'] : ['ADVISOR_JR', 'ADVISOR_SR', 'TRAINER', 'MANAGER'];
+  const list = [];
+  SCENARIOS.forEach(sc => {
+    ensureAgents(sc.id).forEach((g, i) => { const src = embedSrc(g.embed); if (!src) return; const p = sc.personas.find(x => x.id === g.personaId);
+      list.push({ id: g.agentRef || ('app_' + sc.id.replace(/[^a-z0-9]/gi, '') + '_' + (p ? p.id : i) + '_' + g.diff).toLowerCase(), name: g.name || `${sc.cn} 對練 Agent`, kind: 'drill', src, workflow: '', cat: sc.cat, roles: rolesFor(sc.cat), status: 'on' }); });
+    const ev = ensureEval(sc.id); if (ev && ev.workflow) list.push({ id: ev.agentRef || ('app_eval_' + sc.id.replace(/[^a-z0-9]/gi, '')).toLowerCase(), name: ev.name || `${sc.cn} 評估 Agent`, kind: 'eval', src: '', workflow: ev.workflow, cat: sc.cat, roles: rolesFor(sc.cat).concat('TRAINER'), status: 'on' });
+  });
+  const seen = new Set(); return list.filter(a => { if (seen.has(a.id)) return false; seen.add(a.id); a.roles = [...new Set(a.roles)]; return true; });
+}
+function persistAgents() { lsSet(LS_AGENTS, { list: AGENTS, syncedAt: S.agentsSyncedAt || null }); }
+function loadAgents() {
+  const saved = lsGet(LS_AGENTS);
+  if (saved && Array.isArray(saved.list)) { AGENTS.splice(0, AGENTS.length, ...saved.list); S.agentsSyncedAt = saved.syncedAt || null; }
+  else { // 示範資料：視為已於建置時自 AltaBots 同步一次
+    const snap = altabotsAppsSnapshot(); const t = '2026/10/01 09:30';
+    AGENTS.splice(0, AGENTS.length, ...snap.map(a => ({ ...a, synced: t, source: 'altabots' }))); S.agentsSyncedAt = t;
+  }
+  // 把場景裡的 Agent／評估設定依網址／端點對回對應清單，之後以 agentRef 為準
+  SCENARIOS.forEach(sc => { ensureAgents(sc.id).forEach(g => { if (!g.agentRef) { const a = agentForSrc(embedSrc(g.embed)); if (a) g.agentRef = a.id; } }); const ev = ensureEval(sc.id); if (ev && !ev.agentRef) { const a = agentForWorkflow(ev.workflow); if (a) ev.agentRef = a.id; } });
+}
+function openAgentApi() { openDlg('agentapi', { endpoint: ALTABOTS_APPS_API, token: '', mode: 'merge' }); }
+function agentApiSync() {
+  const d = S.dlg.draft;
+  if (!/^https:\/\//i.test(d.endpoint.trim())) { S.dlg.error = 'API 端點須為 https://'; render(); return; }
+  if (!d.token.trim()) { S.dlg.error = '請輸入 AltaBots 工作空間的 API Token'; render(); return; }
+  const snap = altabotsAppsSnapshot(); const t = nowStr(); let added = 0, updated = 0, removed = 0;
+  snap.forEach(a => { const cur = agentById(a.id); if (cur) { Object.assign(cur, { name: a.name, kind: a.kind, src: a.src, workflow: a.workflow, cat: a.cat, roles: a.roles, status: a.status, synced: t, source: 'altabots' }); updated++; } else { AGENTS.push({ ...a, synced: t, source: 'altabots' }); added++; } });
+  if (d.mode === 'replace') { for (let i = AGENTS.length - 1; i >= 0; i--) { const a = AGENTS[i]; if (a.source === 'altabots' && !snap.some(x => x.id === a.id)) { if (agentUsage(a).length) { a.status = 'off'; a.missing = true; } else { AGENTS.splice(i, 1); removed++; } } } }
+  S.agentsSyncedAt = t; persistAgents();
+  audit('同步 Agent 對應', `自 AltaBots 工作空間同步 ${snap.length} 個 Agent（新增 ${added}、更新 ${updated}、移除 ${removed}；${d.mode === 'merge' ? '合併' : '覆蓋'}模式）`, '成員權限');
+  S.dlg.result = `已自 AltaBots 同步 ${snap.length} 個 Agent：新增 ${added}、更新 ${updated}、移除 ${removed}（示範，未實際呼叫 API）。角色對應依 16.2 映射，場景中仍在使用但工作空間已不存在的 Agent 標記為停用而不刪除。`; S.dlg.error = null; render();
+}
+function openAgentDlg(id) {
+  const a = id ? agentById(id) : null;
+  openDlg('agent', a ? { id: a.id, name: a.name, kind: a.kind, src: a.src || '', workflow: a.workflow || '', cat: a.cat || '', roles: (a.roles || []).join(','), status: a.status, source: a.source, synced: a.synced || '' }
+    : { id: '', name: '', kind: 'drill', src: '', workflow: '', cat: Object.keys(CATS)[0] || '', roles: '', status: 'on', source: 'local', synced: '' });
+}
+function saveAgentDlg() {
+  const g = S.dlg; const d = g.draft; const errs = [];
+  if (!d.name.trim()) errs.push('Agent 名稱必填');
+  if (d.kind === 'drill' && !/^https:\/\//i.test(d.src.trim())) errs.push('對練 Agent 的嵌入網址須為 https://');
+  if (d.kind === 'eval' && !d.workflow.trim()) errs.push('評估 Agent 須填 workflow／端點');
+  const roles = d.roles.split(',').filter(k => ROLES[k]); if (!roles.length) errs.push('至少勾選一個可用角色，否則沒有人能使用此 Agent');
+  if (!d.id) { const dup = d.kind === 'drill' ? agentForSrc(d.src.trim()) : agentForWorkflow(d.workflow.trim()); if (dup) errs.push(`已有對應項「${dup.name}」使用相同的${d.kind === 'drill' ? '嵌入網址' : '端點'}`); }
+  if (errs.length) { g.error = errs.join('；'); render(); return; }
+  if (d.id) { const a = agentById(d.id); Object.assign(a, { name: d.name.trim(), kind: d.kind, src: d.src.trim(), workflow: d.workflow.trim(), cat: d.cat, roles, status: d.status }); if (a.source === 'altabots') a.edited = true; audit('編輯 Agent 對應', `${a.name}・角色 ${roles.map(r => ROLES[r].cn).join('、')}・${d.status === 'on' ? '啟用' : '停用'}`, '成員權限'); }
+  else { const id = 'local_' + Date.now().toString(36); AGENTS.push({ id, name: d.name.trim(), kind: d.kind, src: d.src.trim(), workflow: d.workflow.trim(), cat: d.cat, roles, status: d.status, source: 'local', synced: '' }); audit('新增 Agent 對應', `${d.name.trim()}（本地）・角色 ${roles.map(r => ROLES[r].cn).join('、')}`, '成員權限'); }
+  persistAgents(); S.dlg = null; render();
+}
+function deleteAgent(id) {
+  const a = agentById(id); if (!a) return; const use = agentUsage(a);
+  if (use.length) { alert(`「${a.name}」仍被 ${use.length} 個場景設定使用（${[...new Set(use.map(u => u.sc.cn))].join('、')}），請先到場景設定改選其他 Agent`); return; }
+  if (!confirm(`移除對應項「${a.name}」？${a.source === 'altabots' ? '（下次同步若工作空間仍有此 App 會再出現）' : ''}`)) return;
+  AGENTS.splice(AGENTS.indexOf(a), 1); persistAgents(); audit('移除 Agent 對應', `${a.name}（${a.id}）`, '成員權限'); render();
+}
+/* 對練 Agent 組在對應清單中的狀態：供場景編輯、Agent 配置、發起對練做防呆 */
+function agentLinkState(g) {
+  const a = g.agentRef ? agentById(g.agentRef) : agentForSrc(embedSrc(g.embed));
+  if (!a) return { a: null, level: g.embed ? 'unlinked' : 'none', text: g.embed ? '不在 AltaBots 對應清單，無法檢核角色權限' : '' };
+  if (a.missing) return { a, level: 'bad', text: 'AltaBots 工作空間已找不到此 App' };
+  if (a.status !== 'on') return { a, level: 'bad', text: '此 Agent 在對應清單為停用' };
+  if (!(a.roles || []).length) return { a, level: 'bad', text: '此 Agent 沒有任何可用角色' };
+  return { a, level: 'ok', text: `可用角色：${a.roles.map(r => ROLES[r] ? ROLES[r].cn : r).join('、')}` };
+}
+
 /* 角色權限 */
 function setRolePerm(role, key, value) {
   if (!ROLES[role]) return;
@@ -962,6 +1056,28 @@ function viewDlg() {
       <div class="field full"><small>原型僅模擬結果，不實際呼叫；正式版由後端定時與 webhook 同步，停用、調單位、改角色在下次同步生效。</small></div>
     </div>`;
     foot = `<button class="btn-ghost" data-act="dlgcancel">${g.result ? '關閉' : '取消'}</button><button class="btn-primary" data-act="apisync">立即同步</button>`;
+  } else if (g.kind === 'agentapi') {
+    title = '同步 AltaBots 工作空間 Agent'; sub = '自工作空間的 App 清單同步對練／評估 Agent、嵌入網址與可用角色；角色依規格 16.2 對應表映射';
+    body = `<div class="form-grid">
+      <label class="field full"><span>API 端點</span><input data-field="endpoint" class="mono" value="${esc(d.endpoint)}"></label>
+      <label class="field full-2"><span>API Token <b>*</b></span><input data-field="token" type="password" value="${esc(d.token)}" placeholder="AltaBots 工作空間 → 設定 → API Token"></label>
+      <label class="field"><span>同步模式</span><select data-field="mode">${opt('merge', d.mode, '合併（保留本地新增）')}${opt('replace', d.mode, '覆蓋（以 AltaBots 為準）')}</select></label>
+      <div class="field full"><small>覆蓋模式下，工作空間已不存在但場景仍在使用的 Agent 會標記為停用而不刪除，避免對練中斷。原型僅模擬結果；正式版由後端定時與 webhook 同步。</small></div>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">${g.result ? '關閉' : '取消'}</button><button class="btn-primary" data-act="agentapisync">立即同步</button>`;
+  } else if (g.kind === 'agent') {
+    const rl = d.roles.split(',').filter(Boolean);
+    title = d.id ? '編輯 Agent 對應' : '新增 Agent 對應'; sub = d.id ? `${d.id}${d.source === 'altabots' ? `　·　AltaBots 同步 ${d.synced}，手動修改會在下次同步被覆寫` : '　·　本地新增'}` : '手動登記工作空間尚未同步的 Agent';
+    body = `<div class="form-grid">
+      <label class="field full-2"><span>Agent 名稱 <b>*</b></span><input data-field="name" value="${esc(d.name)}" placeholder="altabots · 信貸電銷對練 Agent · 複訪 A1 · L2"></label>
+      <label class="field"><span>類型</span><select data-field="kind">${opt('drill', d.kind, '對練 Agent（iframe）')}${opt('eval', d.kind, '評估 Agent（workflow）')}</select></label>
+      ${d.kind === 'drill' ? `<label class="field full"><span>嵌入網址 <b>*</b></span><input data-field="src" class="mono" value="${esc(d.src)}" placeholder="https://agent.sinopac.ai/altabots/app/…/embed"></label>`
+        : `<label class="field full"><span>workflow／端點 <b>*</b></span><input data-field="workflow" class="mono" value="${esc(d.workflow)}" placeholder="wf_credit_eval 或 https://…"></label>`}
+      <label class="field"><span>建議場景類型</span><select data-field="cat">${Object.keys(CATS).map(k => opt(k, d.cat, CATS[k].short)).join('')}</select></label>
+      <label class="field"><span>狀態</span><select data-field="status">${opt('on', d.status, '啟用')}${opt('off', d.status, '停用')}</select></label>
+      <div class="field full"><span>可用角色 <b>*</b><small style="font-weight:400;color:var(--muted);margin-left:8px">系統擁有者與系統管理員不受限</small></span><div class="chks">${Object.keys(ROLES).filter(k => !ROLE_BYPASS.includes(k)).map(k => `<label class="chk"><input type="checkbox" data-field="roles" value="${k}" ${rl.includes(k) ? 'checked' : ''}><span class="pill" style="color:var(--blue);background:#EDF3FB">${esc(ROLES[k].cn)}</span></label>`).join('')}</div></div>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="agentsave">${d.id ? '儲存' : '建立'}</button>`;
   } else if (g.kind === 'scndel') {
     const blocked = d.enabled || d.sessions > 0;
     title = '刪除場景'; sub = `${d.name}　·　${d.id}`;
@@ -1178,9 +1294,11 @@ function viewNew(sc) {
   const sd = DIFF[S.difficulty];
   return `<div class="wrap">
     <div class="page-h"><h1>發起對練</h1><p>你的角色：<b>${esc(sc.youRole.cn)}</b>　·　預計時長 ${esc(sc.duration)}</p></div>
-    ${(() => { const g = agentFor(sc.id, sel.id, S.difficulty); return g && g.status === 'on' && g.embed
-      ? `<div class="agent-note ok">${svg(I.check, 14)} 對練 Agent：<b>${esc(g.name || '未命名')}</b>　<span class="mono">${esc(embedSrc(g.embed))}</span></div>`
-      : `<div class="agent-note warn">${svg(I.warn, 14)} 此客戶畫像 × 難度尚未配置啟用中的對練 Agent，將以示範對話進行；請管理員至系統設定 → 場景設定配置。</div>`; })()}
+    ${(() => { const g = agentFor(sc.id, sel.id, S.difficulty); if (!(g && g.status === 'on' && g.embed)) return `<div class="agent-note warn">${svg(I.warn, 14)} 此客戶畫像 × 難度尚未配置啟用中的對練 Agent，將以示範對話進行；請管理員至系統設定 → 場景設定配置。</div>`;
+      const ls = agentLinkState(g); const roleOk = !ls.a || roleCanUseAgent(S.user.role, ls.a);
+      if (ls.a && ls.level === 'bad') return `<div class="agent-note bad">${svg(I.warn, 14)} 對練 Agent <b>${esc(g.name)}</b> 目前不可用：${esc(ls.text)}。請聯絡管理員至 成員權限 › Agent 對應 同步或調整。</div>`;
+      if (!roleOk) return `<div class="agent-note bad">${svg(I.warn, 14)} 你的角色「${esc(ROLES[S.user.role].cn)}」不在對練 Agent <b>${esc(g.name)}</b> 的可用角色內（AltaBots 工作空間設定：${esc(ls.a.roles.map(r => ROLES[r] ? ROLES[r].cn : r).join('、'))}）。請聯絡管理員調整角色對應。</div>`;
+      return `<div class="agent-note ok">${svg(I.check, 14)} 對練 Agent：<b>${esc(g.name || '未命名')}</b>　<span class="mono">${esc(embedSrc(g.embed))}</span>${ls.a ? `　<span class="pill good" title="${esc(ls.text)}">AltaBots 已對應</span>` : '　<span class="pill" style="color:#E0882E;background:#FDF3E7" title="不在對應清單，未檢核角色">未對應</span>'}</div>`; })()}
     <h2 style="font-family:'Noto Sans TC';font-size:16px;font-weight:700;margin-bottom:14px">選擇客戶畫像</h2>
     <div class="grid3" style="margin-bottom:28px">${personas}</div>
     <h2 style="font-family:'Noto Sans TC';font-size:16px;font-weight:700;margin-bottom:6px">調整對練難度</h2>
@@ -1192,7 +1310,8 @@ function viewNew(sc) {
         <div class="vr"></div>
         <div class="f"><div class="l">難度</div><div class="v" style="color:${sd.col}">${sd.cn}</div></div>
       </div>
-      <button class="btn-primary" data-act="startcall">${svg(I.play, 17)}開始對練</button>
+      ${(() => { const g = agentFor(sc.id, sel.id, S.difficulty); const ls = g ? agentLinkState(g) : { a: null }; const blocked = g && g.status === 'on' && g.embed && ls.a && (ls.level === 'bad' || !roleCanUseAgent(S.user.role, ls.a));
+        return `<button class="btn-primary" data-act="startcall" ${blocked ? 'disabled title="此 Agent 對你的角色不可用"' : ''}>${svg(I.play, 17)}開始對練</button>`; })()}
     </div>
   </div>`;
 }
@@ -1577,7 +1696,10 @@ function viewSysScenarios() {
 
   const toolbar = S.settingsTab === 'list'
     ? `<div class="filters" style="margin-bottom:14px"><div style="margin-left:auto"><button class="btn-primary" data-act="scnnew">＋ 新增場景</button></div></div>`
-    : `<div class="filters" style="margin-bottom:14px"><div style="margin-left:auto;display:flex;gap:8px;align-items:center"><select id="agent-scn" class="sel-sm">${SCENARIOS.map(s => `<option value="${s.id}">${esc(s.cn)}</option>`).join('')}</select><button class="btn-primary" data-act="agentnew">＋ 新增 Agent</button></div></div>`;
+    : (() => { const cur = S.agentScn && scenarioById(S.agentScn) ? S.agentScn : ''; const curSc = cur ? scenarioById(cur) : null; const blocked = !curSc || !curSc.personas.length;
+        const opts = ['<option value="">選擇場景…</option>'].concat(Object.keys(CATS).map(k => { const list = SCENARIOS.filter(s => s.cat === k); return list.length ? `<optgroup label="${esc(CATS[k].short)}">${list.map(s => `<option value="${s.id}" ${s.id === cur ? 'selected' : ''} ${!s.personas.length ? 'disabled' : ''}>${esc(s.cn)}${SCENARIO_META[s.id].status !== 'on' ? '（未啟用）' : ''}${!s.personas.length ? '（尚無客戶畫像）' : ''}</option>`).join('')}</optgroup>` : ''; })).join('');
+        const hint = !cur ? '先選擇要配置的場景' : !curSc.personas.length ? '此場景尚無客戶畫像，請先到場景清單編輯' : `${curSc.personas.length} 個客戶畫像 × ${(curSc.diffs || []).length} 個難度，已配置 ${ensureAgents(cur).length} 組`;
+        return `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">Agent 由「AltaBots 對應清單」下拉帶入（成員權限 › Agent 對應），每組對應一個客戶畫像 × 難度。</div><div style="margin-left:auto;display:flex;gap:8px;align-items:center"><small style="color:${blocked && cur ? 'var(--red)' : 'var(--muted)'}">${esc(hint)}</small><select id="agent-scn" class="sel-sm" data-act="agentscn">${opts}</select><button class="btn-primary" data-act="agentnew" ${blocked ? 'disabled' : ''}>＋ 新增 Agent</button></div></div>`; })();
   const body = S.settingsTab === 'list'
     ? SCENARIOS.map(s => {
         const meta = SCENARIO_META[s.id];
@@ -1595,18 +1717,19 @@ function viewSysScenarios() {
         </div>`;
       }).join('')
     : `<div class="card"><table class="tbl">
-        <thead><tr><th>場景</th><th>客戶畫像</th><th>難度</th><th>對練 Agent</th><th>iframe</th><th class="num">狀態</th><th></th></tr></thead>
-        <tbody>${SCENARIOS.flatMap(s => ensureAgents(s.id).map(g => {
-          const p = s.personas.find(x => x.id === g.personaId); const df = DIFF[g.diff];
+        <thead><tr><th>場景</th><th>客戶畫像</th><th>難度</th><th>對練 Agent</th><th>iframe</th><th>AltaBots 對應・可用角色</th><th class="num">狀態</th><th></th></tr></thead>
+        <tbody>${SCENARIOS.filter(s => !S.agentScn || s.id === S.agentScn).flatMap(s => ensureAgents(s.id).map(g => {
+          const p = s.personas.find(x => x.id === g.personaId); const df = DIFF[g.diff]; const ls = agentLinkState(g);
           return `<tr><td><b>${esc(s.cn)}</b></td>
             <td>${p ? `<span class="pill" style="color:${p.col};background:${p.col}1f">${esc(p.name)}</span>` : '—'}</td>
             <td>${df ? `<span class="pill" style="color:${df.col};background:${df.col}1f">${df.cn}</span>` : '—'}</td>
             <td class="mono" style="font-size:12px;color:var(--muted)">${esc(g.name || '—')}</td>
             <td class="mono" style="font-size:11.5px;color:${g.embed ? 'var(--ink)' : 'var(--faint)'}">${g.embed ? esc(embedSrc(g.embed) || '已設定') : '未設定'}</td>
+            <td style="font-size:11.5px">${ls.a ? `<span class="pill ${ls.level === 'ok' ? 'good' : 'bad'}">${ls.level === 'ok' ? '已對應' : esc(ls.text)}</span>${ls.level === 'ok' ? `<div style="color:var(--muted);margin-top:3px">${esc(ls.a.roles.map(r => ROLES[r] ? ROLES[r].cn : r).join('、'))}</div>` : ''}` : (g.embed ? '<span class="pill" style="color:#E0882E;background:#FDF3E7">未在對應清單</span>' : '—')}</td>
             <td class="num"><span class="pill" style="color:${g.status === 'on' ? '#1E9E63' : '#7C8992'};background:${g.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${g.status === 'on' ? '已啟用' : '未啟用'}</span></td>
             <td class="num"><button class="btn-ghost sm" data-act="editscn" data-arg="${s.id}">編輯</button></td></tr>`;
         })).join('')}</tbody></table>
-        <div class="tbl-foot">Agent 依「場景 → 客戶畫像 × 難度」配置；在場景的編輯對話框新增或調整。</div></div>`;
+        <div class="tbl-foot">Agent 依「場景 → 客戶畫像 × 難度」配置；在場景的編輯對話框從 AltaBots 對應清單下拉選擇或調整。${S.agentScn ? '目前只顯示所選場景。' : ''}</div></div>`;
 
   return `<div class="wrap">
     <div class="page-h"><h1>場景設定</h1><p>維護工作場景與對練 Agent；啟用後會出現在左側「工作場景」與場景中心。</p></div>
@@ -1614,11 +1737,39 @@ function viewSysScenarios() {
 }
 
 function viewSysMembers() {
-  const tabs = [['members', '成員管理'], ['roles', '角色管理'], ['org', '組織管理']].map(([k, l]) =>
+  const tabs = [['members', '成員管理'], ['roles', '角色管理'], ['org', '組織管理'], ['agents', 'Agent 對應']].map(([k, l]) =>
     `<button class="${S.memberTab === k ? 'on' : ''}" data-act="memtab" data-arg="${k}">${l}</button>`).join('');
 
   let body = '';
-  if (S.memberTab === 'members') {
+  if (S.memberTab === 'agents') {
+    const kindCn = { drill: '對練', eval: '評估' };
+    const rows = AGENTS.slice().sort((a, b) => (a.kind > b.kind ? 1 : a.kind < b.kind ? -1 : 0) || String(a.cat).localeCompare(String(b.cat)) || a.name.localeCompare(b.name, 'zh-Hant')).map(a => {
+      const use = agentUsage(a); const scs = [...new Set(use.map(u => u.sc.cn))];
+      const st = a.missing ? '<span class="pill bad">工作空間已移除</span>' : a.status === 'on' ? '<span class="pill good">啟用</span>' : '<span class="pill" style="color:#7C8992;background:#F4F7F8">停用</span>';
+      return `<tr>
+        <td><b>${esc(a.name)}</b><div class="mono" style="font-size:10.5px;color:var(--faint)">${esc(a.id)}</div></td>
+        <td><span class="pill" style="color:${a.kind === 'drill' ? 'var(--blue)' : '#6A5BC4'};background:${a.kind === 'drill' ? '#EDF3FB' : '#EFEDF8'}">${kindCn[a.kind] || a.kind} Agent</span></td>
+        <td style="font-size:12px">${CATS[a.cat] ? esc(CATS[a.cat].short) : '—'}</td>
+        <td class="mono" style="font-size:11.5px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(a.kind === 'drill' ? a.src : a.workflow)}">${esc(a.kind === 'drill' ? a.src : a.workflow)}</td>
+        <td>${(a.roles || []).length ? a.roles.map(r => ROLES[r] ? `<span class="pill" style="color:var(--blue);background:#EDF3FB;margin:1px 3px 1px 0">${esc(ROLES[r].cn)}</span>` : '').join('') : '<span class="pill bad">無</span>'}</td>
+        <td style="font-size:12px">${scs.length ? scs.map(x => esc(x)).join('、') : '<span style="color:var(--faint)">未使用</span>'}</td>
+        <td>${st}</td>
+        <td style="font-size:11px;color:var(--muted)">${a.source === 'altabots' ? `AltaBots<br>${esc(a.synced || '')}${a.edited ? '<br><span style="color:var(--red)">本地已修改</span>' : ''}` : '本地'}</td>
+        <td class="num" style="white-space:nowrap"><button class="btn-ghost sm" data-act="agentopen" data-arg="${a.id}">編輯</button> <button class="btn-ghost sm danger" data-act="agentremove" data-arg="${a.id}" ${use.length ? 'disabled title="仍有場景使用"' : ''}>移除</button></td></tr>`;
+    }).join('');
+    const byRole = Object.keys(ROLES).map(k => { const list = ROLE_BYPASS.includes(k) ? AGENTS.filter(a => a.status === 'on') : AGENTS.filter(a => a.status === 'on' && (a.roles || []).includes(k)); return `<div class="bar-row"><div class="lb"><span><b style="color:var(--ink)">${esc(ROLES[k].cn)}</b>${ROLE_BYPASS.includes(k) ? ' <small style="color:var(--muted)">不受限</small>' : ''}</span><span>${list.filter(a => a.kind === 'drill').length} 個對練・${list.filter(a => a.kind === 'eval').length} 個評估</span></div><div style="font-size:12px;color:var(--body);margin-top:4px">${list.length ? list.map(a => esc(a.name)).join('、') : '<span style="color:var(--faint)">無可用 Agent</span>'}</div></div>`; }).join('');
+    body = `<div class="filters" style="margin-bottom:14px">
+        <div style="font-size:12.5px;color:var(--muted)">角色 × Agent 的對應以 AltaBots.ai 工作空間為主資料來源${S.agentsSyncedAt ? `，上次同步 ${esc(S.agentsSyncedAt)}` : ''}；場景設定的 Agent 配置從這裡的清單下拉選擇，發起對練時依學員角色檢核。</div>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn-ghost" data-act="agentapiopen">${svg(I.globe, 15)}同步 AltaBots</button>
+          <button class="btn-primary" data-act="agentopen" data-arg="">新增對應</button>
+        </div></div>
+      <div class="card" style="margin-bottom:14px"><table class="tbl">
+        <thead><tr><th>Agent</th><th>類型</th><th>場景類型</th><th>嵌入網址／端點</th><th>可用角色</th><th>使用場景</th><th>狀態</th><th>來源</th><th class="num">操作</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" class="empty">尚無對應資料，請先同步 AltaBots 工作空間</td></tr>'}</tbody></table>
+        <div class="tbl-foot">仍被場景使用的對應項不可移除；覆蓋同步時工作空間已不存在的 Agent 標記為停用。</div></div>
+      <div class="card"><div class="card-h"><h2>依角色檢視</h2><div class="sub">各角色可使用的 Agent</div></div><div class="card-b">${byRole}</div></div>`;
+  } else if (S.memberTab === 'members') {
     const q = S.memberSearch.trim().toLowerCase();
     const rows = MEMBERS.filter(m => !q || (m.name + m.email + ROLES[m.role].cn + (UNITS[m.unit] || '')).toLowerCase().includes(q));
     body = `<div class="filters" style="margin-bottom:14px">
@@ -1958,6 +2109,8 @@ const ACTIONS = {
   gran: g => { S.statGran = g; render(); },
   settab: t => { S.settingsTab = t; render(); },
   memtab: t => { S.memberTab = t; render(); },
+  agentapiopen: () => openAgentApi(), agentapisync: () => agentApiSync(),
+  agentopen: id => openAgentDlg(id || null), agentsave: () => saveAgentDlg(), agentremove: id => deleteAgent(id),
   editscn: id => openEditScenario(id || null),
   cancelscn: () => { S.editScenario = null; render(); },
   savescn: () => saveEditScenario(),
@@ -1966,7 +2119,7 @@ const ACTIONS = {
   personaadd: () => personaAdd(),
   personadel: i => personaDel(i),
   scnnew: () => openEditScenario(null),
-  agentnew: () => { const sel = document.getElementById('agent-scn'); openEditScenario(sel ? sel.value : SCENARIOS[0].id, true); },
+  agentnew: () => { const sc = S.agentScn && scenarioById(S.agentScn); if (!sc) { alert('請先在下拉選單選擇場景'); return; } if (!sc.personas.length) { alert(`「${sc.cn}」尚無客戶畫像，請先在場景清單編輯新增客戶畫像`); return; } openEditScenario(sc.id, true); },
   dlgcancel: () => closeDlg(),
   memberopen: id => openMember(id),
   membersave: () => saveMember(),
@@ -2011,7 +2164,7 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act;
-  if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch' || act === 'memsearch' || act === 'auditsearch') return;
+  if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch' || act === 'memsearch' || act === 'auditsearch' || act === 'agentscn') return;
   if (act === 'replaybar') { const s = currentReportSession(); if (s) { const rect = el.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)); replaySeek(s, ratio * replayTotal(s, replayLines(s.sc))); } e.preventDefault(); return; }
   if (act === 'noop') return;   // 對話框容器：只用來擋住背景的關閉，不可攔截勾選框等原生行為
   const fn = ACTIONS[act];
@@ -2023,6 +2176,8 @@ document.addEventListener('input', e => {
   if (f && S.dlg) {
     const d = S.dlg.draft;
     if (f.dataset.field === 'diffs') { d.diffs = [...document.querySelectorAll('.modal [data-field="diffs"]')].filter(b => b.checked).map(b => b.value).join(','); return; }
+    if (f.dataset.field === 'roles') { d.roles = [...document.querySelectorAll('.modal [data-field="roles"]')].filter(b => b.checked).map(b => b.value).join(','); return; }
+    if (S.dlg.kind === 'agent' && f.dataset.field === 'kind') { d.kind = f.value; render(); return; }
     const v = f.dataset.type === 'bool' ? f.value === 'true' : (f.type === 'checkbox' ? f.checked : f.value);
     d[f.dataset.field] = v; if ((S.dlg.kind === 'csv' || S.dlg.kind === 'orgcsv') && f.dataset.field === 'text') d.rows = null;
     if (f.tagName === 'SELECT' && S.dlg.kind === 'member' && f.dataset.field === 'role') render();
@@ -2031,11 +2186,15 @@ document.addEventListener('input', e => {
   if (f && S.editScenario) {
     const d = S.editScenario.draft;
     if (f.dataset.field.startsWith('agents.') || f.dataset.field.startsWith('personas.')) {
-      const [list, idx, key] = f.dataset.field.split('.'); const g = d[list][Number(idx)]; if (g) { g[key] = f.value; if (f.tagName === 'SELECT') render(); }
+      const [list, idx, key] = f.dataset.field.split('.'); const g = d[list][Number(idx)];
+      if (g && key === 'agentRef') { const a = f.value ? agentById(f.value) : null; g.agentRef = a ? a.id : ''; if (a) { g.name = a.name; g.embed = `<iframe src="${a.src}" allow="microphone; autoplay"></iframe>`; } render(); return; }
+      if (g) { g[key] = f.value; if (key === 'embed' && g.agentRef) { const a = agentById(g.agentRef); if (a && embedSrc(f.value) !== a.src) g.agentRef = ''; } if (f.tagName === 'SELECT') render(); }
       return;
     }
     if (f.dataset.field.startsWith('eval.')) {
-      const key = f.dataset.field.slice(5); d.eval[key] = f.type === 'checkbox' ? f.checked : f.value; if (f.tagName === 'SELECT') render(); return;
+      const key = f.dataset.field.slice(5);
+      if (key === 'agentRef') { const a = f.value ? agentById(f.value) : null; d.eval.agentRef = a ? a.id : ''; if (a) { d.eval.name = a.name; d.eval.workflow = a.workflow; } render(); return; }
+      d.eval[key] = f.type === 'checkbox' ? f.checked : f.value; if (key === 'workflow' && d.eval.agentRef) { const a = agentById(d.eval.agentRef); if (a && a.workflow !== f.value) d.eval.agentRef = ''; } if (f.tagName === 'SELECT') render(); return;
     }
     if (f.dataset.field === 'cat') { applyCatToDraft(S.editScenario, f.value); render(); return; }
     if (f.dataset.field === 'diffs') { toggleDraftDiff(S.editScenario, f.value, f.checked); render(); return; }
@@ -2048,6 +2207,7 @@ document.addEventListener('input', e => {
   else if (el.dataset.act === 'recsearch') { S.recSearch = el.value; render(); }
   else if (el.dataset.act === 'memsearch') { S.memberSearch = el.value; render(); }
   else if (el.dataset.act === 'auditsearch') { S.auditFilter.q = el.value; render(); }
+  else if (el.dataset.act === 'agentscn') { S.agentScn = el.value; render(); }
 });
 
 document.addEventListener('change', e => {
@@ -2084,6 +2244,7 @@ applyDeletedScenarios();
 loadScenarioOverrides();
 SCENARIOS.forEach(s => { ensureAgents(s.id); ensureEval(s.id); });
 loadOrgOverrides();
+loadAgents();
 loadSessions();
 S.route = parseHash();
 render();

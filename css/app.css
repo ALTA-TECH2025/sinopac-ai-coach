@@ -522,3 +522,7 @@ table.tbl th .sort-ic { font-size: 10px; margin-left: 5px; opacity: .6; }
 .pr-strip .s { font-size: 11.5px; color: var(--muted); }
 .pr-strip .hint { margin-left: auto; font-size: 11.5px; color: var(--faint); max-width: 48%; }
 @media (max-width: 900px) { .pr-strip .hint { margin-left: 0; max-width: none; } }
+
+/* Agent 對應：角色不可用／Agent 停用的提示 */
+.agent-note.bad { background: #FDECEC; color: #8A1C1C; border: 1px solid #F3C4C4; }
+.btn-primary:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
