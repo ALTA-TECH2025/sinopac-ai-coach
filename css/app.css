@@ -394,3 +394,48 @@ table.tbl tbody tr.clickable:hover { background: var(--soft); cursor: pointer; }
   .call-body { grid-template-columns: 1fr; }
   .call-rail { display: none; }
 }
+
+/* ---------------------------------------------------------------- 場景設定：編輯表單 */
+.modal.form { max-width: 720px; text-align: left; padding: 22px 24px 20px; max-height: 92vh; overflow-y: auto; }
+.modal.form .form-hd { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.modal.form .form-hd h3 { margin-bottom: 3px; }
+.modal.form .form-hd p { margin: 0; font-size: 12px; color: var(--muted); }
+.modal.form .x { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); display: flex; align-items: center; justify-content: center; transform: rotate(180deg); }
+.modal.form .form-err { background: var(--red-soft); color: var(--red); font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 9px 12px; margin-bottom: 12px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px 14px; }
+.form-grid .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.form-grid .field.full { grid-column: 1 / -1; }
+.form-grid .field > span { font-size: 12px; font-weight: 700; color: var(--ink2); }
+.form-grid .field > span b { color: var(--red); }
+.form-grid .field input, .form-grid .field select, .form-grid .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--ink); padding: 8px 11px; font-size: 13px; outline: none; }
+.form-grid .field textarea { resize: vertical; line-height: 1.5; }
+.form-grid .field textarea.mono { font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+.form-grid .field input:focus, .form-grid .field select:focus, .form-grid .field textarea:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(216,30,38,.10); }
+.form-grid .field small { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-all; }
+.form-grid .chks { display: flex; flex-wrap: wrap; gap: 8px; }
+.form-grid .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.form-grid .chk input { width: 15px; height: 15px; accent-color: var(--red); margin: 0; }
+.modal.form .form-ft { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.modal.form .form-ft .btn-primary, .modal.form .form-ft .btn-ghost { padding: 10px 20px; }
+@media (max-width: 760px) { .form-grid { grid-template-columns: 1fr 1fr; } }
+
+/* ---------------------------------------------------------------- 成員權限：可編輯 */
+.btn-ghost.sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+.btn-ghost.sm.danger { color: var(--red); }
+.form-grid .field.full-2 { grid-column: span 2; }
+.form-grid .field input[type="file"] { padding: 6px 8px; font-size: 12px; }
+.form-grid .field input[type="password"] { font-family: 'IBM Plex Mono', monospace; letter-spacing: .12em; }
+.modal.form .form-ok { background: #EAF8F2; color: #1E9E63; font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 9px 12px; margin-bottom: 12px; }
+.csv-prev { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
+.csv-prev table.tbl th, .csv-prev table.tbl td { padding: 7px 10px; font-size: 12px; }
+.csv-prev tr.bad td { background: #FFF6F6; }
+.pill.bad { color: var(--red); background: var(--red-soft); }
+.pill.good { color: #1E9E63; background: #EAF8F2; }
+.pill.info { color: var(--blue); background: #EDF3FB; }
+table.tbl.roles td { vertical-align: middle; }
+.sel-sm { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); padding: 5px 8px; font-size: 12.5px; }
+table.tbl.roles .chk input { width: 16px; height: 16px; accent-color: var(--red); cursor: pointer; }
+.org-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line2); }
+.org-row .org-acts { margin-left: auto; display: flex; gap: 6px; opacity: .25; transition: opacity .15s; }
+.org-row:hover .org-acts { opacity: 1; }
+.org-row .pill { margin-left: 4px; }

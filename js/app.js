@@ -20,6 +20,9 @@ const S = {
   reveal: 0, elapsed: 0, confirmEnd: false, timer: null,
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
   liveSession: null,
+  editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
+  dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
+  memberSearch: '',
 };
 
 // 難度集合依應用設定：信貸電銷 L1／L2／L3，客服話務 一般／客訴；每個場景以 diffs 指定可用集合
@@ -210,6 +213,320 @@ function viewCrumb(parts, opts = {}) {
   const perm = opts.perm ? `<span class="perm">權限 ${esc(ROLES[S.user.role].cn)}</span>` : '';
   const back = opts.back ? `<button class="back" data-act="goto" data-arg="${opts.back}">${svg(I.back, 15)}返回</button>` : '';
   return `<div class="crumb">${items}${perm}${back}</div>`;
+}
+
+/* ------------------------------------------------------------------ 場景設定：編輯與本機保存 */
+const CAT_LABEL = { credit: '信貸電銷 · Telesales', service: '客服話務 · Service' };
+const DIFF_SETS = { credit: ['L1', 'L2', 'L3'], service: ['normal', 'complaint'] };
+const OVERRIDE_KEY = 'sinopac-coach.scenarioOverrides';
+
+function loadScenarioOverrides() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(OVERRIDE_KEY) || '{}'); } catch (e) { saved = {}; }
+  Object.entries(saved).forEach(([id, o]) => {
+    const sc = SCENARIOS.find(s => s.id === id); const meta = SCENARIO_META[id];
+    if (!sc || !meta || !o) return;
+    Object.assign(sc, o.scenario || {});
+    if (o.scenario && o.scenario.youRoleCn) sc.youRole = { ...sc.youRole, cn: o.scenario.youRoleCn };
+    Object.assign(meta, o.meta || {});
+  });
+}
+function saveScenarioOverride(id, scenarioPatch, metaPatch) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(OVERRIDE_KEY) || '{}'); } catch (e) { saved = {}; }
+  const prev = saved[id] || { scenario: {}, meta: {} };
+  saved[id] = { scenario: { ...prev.scenario, ...scenarioPatch }, meta: { ...prev.meta, ...metaPatch } };
+  try { localStorage.setItem(OVERRIDE_KEY, JSON.stringify(saved)); } catch (e) { /* 私密視窗等情況忽略 */ }
+}
+function openEditScenario(id) {
+  const sc = scenarioById(id); const meta = SCENARIO_META[id];
+  if (!sc || !meta) return;
+  S.editScenario = { id, draft: {
+    cn: sc.cn, en: sc.en, desc: sc.desc, cat: sc.cat, youRoleCn: sc.youRole.cn, duration: sc.duration,
+    diffs: (sc.diffs || DIFF_SETS[sc.cat] || []).join(','),
+    ver: meta.ver, owner: meta.owner, status: meta.status, agent: meta.agent, embed: meta.embed || '',
+  } };
+  render();
+}
+function embedSrc(code) { const m = /src\s*=\s*["']([^"']+)["']/i.exec(code || ''); return m ? m[1] : ''; }
+function saveEditScenario() {
+  const e = S.editScenario; if (!e) return;
+  const d = e.draft; const sc = scenarioById(e.id); const meta = SCENARIO_META[e.id];
+  const errors = [];
+  if (!d.cn.trim()) errors.push('場景名稱必填');
+  if (d.embed.trim() && !/^https:\/\//i.test(embedSrc(d.embed))) errors.push('iframe 嵌入代碼須含 https:// 開頭的 src');
+  if (errors.length) { e.error = errors.join('；'); render(); return; }
+  const diffs = d.diffs.split(',').map(x => x.trim()).filter(k => DIFF[k]);
+  const scenarioPatch = { cn: d.cn.trim(), en: d.en.trim(), desc: d.desc.trim(), cat: d.cat, catCn: CAT_LABEL[d.cat] || sc.catCn,
+    duration: d.duration.trim(), diffs: diffs.length ? diffs : (DIFF_SETS[d.cat] || sc.diffs), youRoleCn: d.youRoleCn.trim() };
+  const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agent: d.agent.trim(), embed: d.embed.trim() };
+  Object.assign(sc, scenarioPatch); sc.youRole = { ...sc.youRole, cn: scenarioPatch.youRoleCn };
+  Object.assign(meta, metaPatch);
+  saveScenarioOverride(e.id, scenarioPatch, metaPatch);
+  audit('編輯場景', `${sc.cn} ${meta.ver}・${meta.status === 'on' ? '已啟用' : '未啟用'}${metaPatch.embed ? '・已設定 iframe' : ''}`, '場景設定');
+  S.editScenario = null;
+  if (S.route.name === 'scenario' && S.route.sc === e.id && meta.status !== 'on') { go('#/hub'); return; }
+  render();
+}
+
+function viewEditScenarioModal() {
+  const e = S.editScenario; if (!e) return '';
+  const d = e.draft; const sc = scenarioById(e.id);
+  const opt = (v, cur, label) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
+  const diffChoices = Object.keys(DIFF).map(k => {
+    const on = d.diffs.split(',').includes(k);
+    return `<label class="chk"><input type="checkbox" data-field="diffs" value="${k}" ${on ? 'checked' : ''}><span class="pill" style="color:${DIFF[k].col};background:${DIFF[k].col}1f">${DIFF[k].cn}</span></label>`;
+  }).join('');
+  const src = embedSrc(d.embed);
+  return `<div class="modal-bg" data-act="cancelscn">
+    <div class="modal form" data-act="noop">
+      <div class="form-hd"><div><h3>編輯場景</h3><p>${esc(sc.id)}　·　儲存後立即生效，並保存在此瀏覽器</p></div>
+        <button class="x" data-act="cancelscn" aria-label="關閉">${svg(I.back, 16)}</button></div>
+      ${e.error ? `<div class="form-err">${esc(e.error)}</div>` : ''}
+      <div class="form-grid">
+        <label class="field"><span>場景名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}"></label>
+        <label class="field"><span>英文名稱</span><input data-field="en" value="${esc(d.en)}"></label>
+        <label class="field full"><span>說明</span><textarea data-field="desc" rows="2">${esc(d.desc)}</textarea></label>
+        <label class="field"><span>場景類型</span><select data-field="cat">${opt('credit', d.cat, '信貸電銷')}${opt('service', d.cat, '客服話務')}</select></label>
+        <label class="field"><span>你的角色</span><input data-field="youRoleCn" value="${esc(d.youRoleCn)}"></label>
+        <label class="field"><span>預計時長</span><input data-field="duration" value="${esc(d.duration)}" placeholder="3–8′"></label>
+        <label class="field"><span>狀態</span><select data-field="status">${opt('on', d.status, '已啟用')}${opt('off', d.status, '未啟用')}</select></label>
+        <label class="field"><span>版本</span><input data-field="ver" value="${esc(d.ver)}"></label>
+        <label class="field"><span>維護人</span><input data-field="owner" value="${esc(d.owner)}"></label>
+        <div class="field full"><span>難度集合</span><div class="chks">${diffChoices}</div></div>
+        <label class="field full"><span>對練 Agent 名稱</span><input data-field="agent" value="${esc(d.agent)}"></label>
+        <label class="field full"><span>Agent iframe 嵌入代碼</span>
+          <textarea data-field="embed" rows="3" class="mono" placeholder='<iframe src="https://agent.sinopac.ai/altabots/app/.../embed" allow="microphone; autoplay"></iframe>'>${esc(d.embed)}</textarea>
+          <small>${src ? `解析到 src：${esc(src)}` : '貼入 altabots 開發空間提供的嵌入代碼；系統只保留 src，尺寸由對練中畫面決定。'}</small></label>
+        <div class="field full"><span>客戶畫像</span><div class="chks">${sc.personas.map(p => `<span class="pill" style="color:${p.col};background:${p.col}1f">${esc(p.name)}・${DIFF[p.diff] ? DIFF[p.diff].cn : p.diff}</span>`).join('')}</div>
+          <small>客戶畫像的新增與編輯在 altabots 開發空間維護，此處唯讀。</small></div>
+      </div>
+      <div class="form-ft"><button class="btn-ghost" data-act="cancelscn">取消</button><button class="btn-primary" data-act="savescn">儲存</button></div>
+    </div></div>`;
+}
+
+/* ------------------------------------------------------------------ 成員權限：可編輯、CSV／API 匯入、角色權限矩陣 */
+const LS = { members: 'sinopac-coach.members', roles: 'sinopac-coach.roles', org: 'sinopac-coach.org', audit: 'sinopac-coach.audit' };
+const PALETTE = ['#D81E26', '#2D6CC0', '#009E96', '#E0882E', '#6A5BC4'];
+const ALTABOTS_MEMBERS_API = 'https://altabots.sinopac.ai/api/v1/workspaces/sinopac-drill/members';
+
+// 數據報表與系統設定的導覽權限，跟著角色管理頁的設定走；預設值等同原本 CAN 的規則
+const ROLE_PERMS = {};
+Object.keys(ROLES).forEach(k => {
+  const r = ROLES[k];
+  ROLE_PERMS[k] = { insights: r.scope !== 'self', stats: r.scope !== 'self', scenarioSettings: r.rank >= 2, settings: r.rank >= 4 };
+});
+CAN.stats = u => !!(ROLE_PERMS[u.role] && (ROLE_PERMS[u.role].insights || ROLE_PERMS[u.role].stats));
+CAN.settings = u => !!(ROLE_PERMS[u.role] && ROLE_PERMS[u.role].settings);
+CAN.scenarioSettings = u => !!(ROLE_PERMS[u.role] && (ROLE_PERMS[u.role].scenarioSettings || ROLE_PERMS[u.role].settings));
+
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+function orgUnits(tree = ORG) { const out = []; (function walk(n, depth, parent) { if (depth === 2) out.push({ ...n, parent }); (n.children || []).forEach(ch => walk(ch, depth + 1, n)); })(tree, 0, null); return out; }
+function rebuildUnits() { Object.keys(UNITS).forEach(k => delete UNITS[k]); orgUnits().forEach(u => { UNITS[u.id] = u.name; }); }
+function findOrgNode(id, n = ORG, parent = null, depth = 0) {
+  if (n.id === id) return { node: n, parent, depth };
+  for (const ch of (n.children || [])) { const hit = findOrgNode(id, ch, n, depth + 1); if (hit) return hit; }
+  return null;
+}
+function loadOrgOverrides() {
+  const m = lsGet(LS.members); if (Array.isArray(m) && m.length) { MEMBERS.splice(0, MEMBERS.length, ...m); }
+  const r = lsGet(LS.roles); if (r) Object.keys(r).forEach(k => { if (ROLES[k]) { if (r[k].scope) ROLES[k].scope = r[k].scope; if (r[k].perms) Object.assign(ROLE_PERMS[k], r[k].perms); } });
+  const o = lsGet(LS.org); if (o && o.children) { Object.assign(ORG, o); rebuildUnits(); }
+  const au = lsGet(LS.audit); if (Array.isArray(au) && au.length) AUDIT.unshift(...au);
+}
+function persistMembers() { lsSet(LS.members, MEMBERS); }
+function persistRoles() { const out = {}; Object.keys(ROLES).forEach(k => { out[k] = { scope: ROLES[k].scope, perms: ROLE_PERMS[k] }; }); lsSet(LS.roles, out); }
+function persistOrg() { lsSet(LS.org, ORG); rebuildUnits(); }
+function audit(act, detail, mod = '成員權限') {
+  const now = new Date(); const pad = n => String(n).padStart(2, '0');
+  AUDIT.unshift({ at: `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`, mod, act, who: S.user ? S.user.name : '系統', detail });
+  const saved = lsGet(LS.audit) || []; saved.unshift(AUDIT[0]); lsSet(LS.audit, saved.slice(0, 200));
+}
+function nextMemberId() { let n = 0; MEMBERS.forEach(m => { const x = parseInt(String(m.id).replace(/\D/g, ''), 10); if (x > n) n = x; }); return 'SP-' + String(n + 1).padStart(4, '0'); }
+function roleByName(v) { v = String(v || '').trim(); if (ROLES[v]) return v; const hit = Object.keys(ROLES).find(k => ROLES[k].cn === v || ROLES[k].cn.replace(/\s/g, '') === v.replace(/\s/g, '')); return hit || null; }
+function unitByName(v) { v = String(v || '').trim(); if (UNITS[v]) return v; const hit = orgUnits().find(u => u.name === v || u.code === v); return hit ? hit.id : null; }
+function todayStr() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+
+function openDlg(kind, draft) { S.dlg = { kind, draft, error: null, result: null }; render(); }
+function closeDlg() { S.dlg = null; render(); }
+
+/* 成員 */
+function openMember(id) {
+  const m = id ? memberById(id) : null;
+  openDlg('member', m ? { id: m.id, name: m.name, email: m.email, role: m.role, unit: m.unit, active: !!m.active }
+                      : { id: '', name: '', email: '', role: 'ADVISOR_JR', unit: orgUnits()[0] ? orgUnits()[0].id : '', active: true });
+}
+function saveMember() {
+  const d = S.dlg.draft; const errs = [];
+  if (!d.name.trim()) errs.push('姓名必填');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email.trim())) errs.push('電子郵箱格式不正確');
+  if (!ROLES[d.role]) errs.push('角色無效');
+  if (!UNITS[d.unit]) errs.push('所屬單位無效');
+  const dup = MEMBERS.find(m => m.email.toLowerCase() === d.email.trim().toLowerCase() && m.id !== d.id); if (dup) errs.push(`電子郵箱已被 ${dup.name} 使用`);
+  if (errs.length) { S.dlg.error = errs.join('；'); render(); return; }
+  if (d.id) {
+    const m = memberById(d.id); Object.assign(m, { name: d.name.trim(), email: d.email.trim(), role: d.role, unit: d.unit, active: !!d.active });
+    audit('編輯成員', `${m.name}（${ROLES[m.role].cn}・${UNITS[m.unit]}）${m.active ? '' : '・已停用'}`);
+    if (S.user && S.user.id === m.id) S.user = m;
+  } else {
+    const m = { id: nextMemberId(), name: d.name.trim(), email: d.email.trim(), role: d.role, unit: d.unit, col: PALETTE[MEMBERS.length % PALETTE.length], active: !!d.active, joined: todayStr() };
+    MEMBERS.push(m); audit('新增帳號', `建立 ${m.name}（${ROLES[m.role].cn}・${UNITS[m.unit]}）`);
+  }
+  persistMembers(); S.dlg = null; render();
+}
+function toggleMember(id) {
+  const m = memberById(id); if (!m) return;
+  if (S.user && S.user.id === id) { alert('不能停用目前登入的帳號'); return; }
+  m.active = !m.active; persistMembers(); audit(m.active ? '啟用成員' : '停用成員', `${m.name}（${UNITS[m.unit]}）${m.active ? '' : '，保留歷史對練記錄'}`); render();
+}
+
+/* CSV 匯入 */
+const CSV_SAMPLE = 'name,email,role,unit\n陳建宏,chienhung.chen@sinopac.com,ADVISOR_JR,phone\n黃雅君,yachun.huang@sinopac.com,理專｜1年以上,分行通路';
+function parseCsv(text) {
+  const lines = String(text || '').replace(/\r/g, '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return { rows: [], error: '沒有內容' };
+  const head = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const idx = { name: head.indexOf('name'), email: head.indexOf('email'), role: head.indexOf('role'), unit: head.indexOf('unit') };
+  if (Object.values(idx).some(i => i < 0)) return { rows: [], error: '標題列須包含 name,email,role,unit' };
+  const rows = lines.slice(1).map((l, i) => {
+    const c = l.split(',').map(x => x.trim());
+    const r = { line: i + 2, name: c[idx.name] || '', email: c[idx.email] || '', roleIn: c[idx.role] || '', unitIn: c[idx.unit] || '' };
+    r.role = roleByName(r.roleIn); r.unit = unitByName(r.unitIn);
+    const existing = MEMBERS.find(m => m.email.toLowerCase() === r.email.toLowerCase());
+    r.mode = existing ? 'update' : 'create';
+    r.problems = [];
+    if (!r.name) r.problems.push('缺姓名'); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email)) r.problems.push('郵箱格式');
+    if (!r.role) r.problems.push('角色無法對應'); if (!r.unit) r.problems.push('單位無法對應');
+    return r;
+  });
+  return { rows, error: null };
+}
+function openCsv() { openDlg('csv', { text: '', rows: null, parseError: null }); }
+function csvParse() { const d = S.dlg.draft; const r = parseCsv(d.text); d.rows = r.rows; d.parseError = r.error; S.dlg.error = null; render(); }
+function csvImport() {
+  const d = S.dlg.draft; if (!d.rows) csvParse(); if (!d.rows || !d.rows.length) { S.dlg.error = '沒有可匯入的資料列'; render(); return; }
+  const ok = d.rows.filter(r => !r.problems.length); if (!ok.length) { S.dlg.error = '所有資料列都有問題，請修正後重新解析'; render(); return; }
+  let created = 0, updated = 0;
+  ok.forEach(r => {
+    const m = MEMBERS.find(x => x.email.toLowerCase() === r.email.toLowerCase());
+    if (m) { Object.assign(m, { name: r.name, role: r.role, unit: r.unit }); updated++; }
+    else { MEMBERS.push({ id: nextMemberId(), name: r.name, email: r.email, role: r.role, unit: r.unit, col: PALETTE[MEMBERS.length % PALETTE.length], active: true, joined: todayStr() }); created++; }
+  });
+  persistMembers(); audit('CSV 匯入', `新增 ${created} 位、更新 ${updated} 位，略過 ${d.rows.length - ok.length} 列`);
+  S.dlg.result = `匯入完成：新增 ${created} 位、更新 ${updated} 位${d.rows.length - ok.length ? `，略過 ${d.rows.length - ok.length} 列有問題的資料` : ''}。`; S.dlg.error = null; d.rows = null; d.text = ''; render();
+}
+
+/* API 同步（altabots 工作空間） */
+function openApi() { openDlg('api', { endpoint: ALTABOTS_MEMBERS_API, token: '', mode: 'merge' }); }
+function apiSync() {
+  const d = S.dlg.draft;
+  if (!/^https:\/\//i.test(d.endpoint.trim())) { S.dlg.error = 'API 端點須為 https://'; render(); return; }
+  if (!d.token.trim()) { S.dlg.error = '請輸入 altabots 工作空間的 API Token'; render(); return; }
+  // 原型：模擬同步結果，不實際呼叫；正式版由後端以 token 拉取成員與角色並依 16.2 對應表寫入
+  const n = MEMBERS.length;
+  MEMBERS.forEach(m => { m.synced = todayStr(); }); persistMembers();
+  audit('API 同步', `自 altabots 工作空間同步 ${n} 位成員（${d.mode === 'merge' ? '合併' : '覆蓋'}模式）`);
+  S.dlg.result = `已自 altabots 同步 ${n} 位成員（示範，未實際呼叫 API）。角色依 16.2 對應表映射。`; S.dlg.error = null; render();
+}
+
+/* 角色權限 */
+function setRolePerm(role, key, value) {
+  if (!ROLES[role]) return;
+  if (key === 'scope') ROLES[role].scope = value;
+  else ROLE_PERMS[role][key] = !!value;
+  persistRoles(); audit('角色調整', `${ROLES[role].cn}：${{ scope: '資料範圍', insights: '洞察分析', stats: '對練統計', scenarioSettings: '場景設定', settings: '系統設定' }[key]} → ${key === 'scope' ? { all: '全行', team: '本人與下屬', self: '僅本人' }[value] : (value ? '開' : '關')}`);
+  render();
+}
+
+/* 組織 */
+function openOrg(mode, id) {
+  if (mode === 'add') { const hit = findOrgNode(id); openDlg('org', { mode: 'add', parent: id, parentName: hit.node.name, depth: hit.depth + 1, name: '', code: '' }); return; }
+  const hit = findOrgNode(id); if (!hit) return;
+  const parents = hit.depth === 2 ? ORG.children.map(d => ({ id: d.id, name: d.name })) : [];
+  openDlg('org', { mode: 'edit', id, depth: hit.depth, name: hit.node.name, code: hit.node.code, parent: hit.parent ? hit.parent.id : '', parents });
+}
+function saveOrg() {
+  const d = S.dlg.draft; const errs = [];
+  if (!d.name.trim()) errs.push('名稱必填'); if (!d.code.trim()) errs.push('代碼必填');
+  const codeDup = (function walk(n) { if (n.code === d.code.trim() && n.id !== d.id) return true; return (n.children || []).some(walk); })(ORG); if (codeDup) errs.push('代碼已存在');
+  if (errs.length) { S.dlg.error = errs.join('；'); render(); return; }
+  if (d.mode === 'add') {
+    const hit = findOrgNode(d.parent); const node = { id: 'org-' + Date.now().toString(36), name: d.name.trim(), code: d.code.trim() };
+    if (d.depth === 1) node.children = [];
+    (hit.node.children = hit.node.children || []).push(node); audit('新增組織', `${hit.node.name} → ${node.name}（${node.code}）`);
+  } else {
+    const hit = findOrgNode(d.id); Object.assign(hit.node, { name: d.name.trim(), code: d.code.trim() });
+    if (hit.depth === 2 && d.parent && hit.parent.id !== d.parent) {
+      hit.parent.children = hit.parent.children.filter(x => x.id !== d.id); const np = findOrgNode(d.parent).node; (np.children = np.children || []).push(hit.node);
+      audit('移動組織', `${hit.node.name} 移至 ${np.name}`);
+    } else audit('編輯組織', `${hit.node.name}（${hit.node.code}）`);
+  }
+  persistOrg(); S.dlg = null; render();
+}
+function deleteOrg(id) {
+  const hit = findOrgNode(id); if (!hit || !hit.parent) return;
+  if ((hit.node.children || []).length) { alert('此節點底下仍有單位，無法刪除'); return; }
+  if (MEMBERS.some(m => m.unit === id)) { alert('此單位仍有成員，請先移動成員'); return; }
+  if (!confirm(`刪除「${hit.node.name}」？`)) return;
+  hit.parent.children = hit.parent.children.filter(x => x.id !== id); persistOrg(); audit('刪除組織', `${hit.node.name}（${hit.node.code}）`); render();
+}
+
+function viewDlg() {
+  const g = S.dlg; if (!g) return '';
+  const d = g.draft;
+  const opt = (v, cur, label) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+  const err = g.error ? `<div class="form-err">${esc(g.error)}</div>` : '';
+  const ok = g.result ? `<div class="form-ok">${esc(g.result)}</div>` : '';
+  let title = '', sub = '', body = '', foot = '';
+  if (g.kind === 'member') {
+    title = d.id ? '編輯成員' : '新增成員'; sub = d.id ? d.id : '建立可登入對練系統的成員帳號，並指定角色與單位';
+    body = `<div class="form-grid">
+      <label class="field"><span>姓名 <b>*</b></span><input data-field="name" value="${esc(d.name)}"></label>
+      <label class="field full-2"><span>電子郵箱 <b>*</b></span><input data-field="email" value="${esc(d.email)}" placeholder="name@sinopac.com"></label>
+      <label class="field"><span>角色</span><select data-field="role">${Object.keys(ROLES).map(k => opt(k, d.role, ROLES[k].cn)).join('')}</select></label>
+      <label class="field"><span>所屬單位</span><select data-field="unit">${orgUnits().map(u => opt(u.id, d.unit, `${u.parent.name}／${u.name}`)).join('')}</select></label>
+      <label class="field"><span>狀態</span><select data-field="active" data-type="bool">${opt('true', String(d.active), '啟用')}${opt('false', String(d.active), '停用')}</select></label>
+      <div class="field full"><small>資料範圍與可見報表由角色決定（角色管理頁）：${esc({ all: '全行', team: '本人與下屬', self: '僅本人' }[ROLES[d.role] ? ROLES[d.role].scope : 'self'])}。</small></div>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="membersave">儲存</button>`;
+  } else if (g.kind === 'csv') {
+    title = 'CSV 匯入成員'; sub = '欄位：name,email,role,unit；role 可填代碼或名稱，unit 可填代碼、名稱或單位 ID；以 email 判斷新增或更新';
+    const preview = d.rows ? `<div class="field full"><span>解析結果　${d.rows.filter(r => !r.problems.length).length}／${d.rows.length} 列可匯入</span>
+      <div class="csv-prev"><table class="tbl"><thead><tr><th>#</th><th>姓名</th><th>郵箱</th><th>角色</th><th>單位</th><th>動作</th></tr></thead><tbody>
+      ${d.rows.map(r => `<tr class="${r.problems.length ? 'bad' : ''}"><td class="mono">${r.line}</td><td>${esc(r.name)}</td><td style="font-size:12px">${esc(r.email)}</td>
+        <td>${r.role ? esc(ROLES[r.role].cn) : `<span class="pill bad">${esc(r.roleIn || '—')}</span>`}</td><td>${r.unit ? esc(UNITS[r.unit]) : `<span class="pill bad">${esc(r.unitIn || '—')}</span>`}</td>
+        <td>${r.problems.length ? `<span class="pill bad">${esc(r.problems.join('、'))}</span>` : `<span class="pill ${r.mode === 'create' ? 'good' : 'info'}">${r.mode === 'create' ? '新增' : '更新'}</span>`}</td></tr>`).join('')}
+      </tbody></table></div></div>` : '';
+    body = `<div class="form-grid">
+      <div class="field full"><span>選擇檔案</span><input type="file" accept=".csv,text/csv" data-file="csv"><small>或直接貼入下方文字區。</small></div>
+      <label class="field full"><span>CSV 內容</span><textarea data-field="text" rows="6" class="mono" placeholder="${esc(CSV_SAMPLE)}">${esc(d.text)}</textarea></label>
+      ${d.parseError ? `<div class="form-err full">${esc(d.parseError)}</div>` : ''}
+      ${preview}
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="csvsample">帶入範例</button><button class="btn-ghost" data-act="csvparse">解析預覽</button><button class="btn-ghost" data-act="dlgcancel">${g.result ? '關閉' : '取消'}</button><button class="btn-primary" data-act="csvimport">匯入</button>`;
+  } else if (g.kind === 'api') {
+    title = 'API 同步成員（altabots）'; sub = '以行內 SSO 登入 altabots 工作空間後，從工作空間成員名單同步成員、單位與角色；角色依規格 16.2 對應表映射';
+    body = `<div class="form-grid">
+      <label class="field full"><span>API 端點</span><input data-field="endpoint" class="mono" value="${esc(d.endpoint)}"></label>
+      <label class="field full-2"><span>API Token <b>*</b></span><input data-field="token" type="password" value="${esc(d.token)}" placeholder="altabots 工作空間 → 設定 → API Token"></label>
+      <label class="field"><span>同步模式</span><select data-field="mode">${opt('merge', d.mode, '合併（保留本地新增）')}${opt('replace', d.mode, '覆蓋（以 altabots 為準）')}</select></label>
+      <div class="field full"><small>原型僅模擬結果，不實際呼叫；正式版由後端定時與 webhook 同步，停用、調單位、改角色在下次同步生效。</small></div>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">${g.result ? '關閉' : '取消'}</button><button class="btn-primary" data-act="apisync">立即同步</button>`;
+  } else if (g.kind === 'org') {
+    const lvl = ['事業群', '處', '單位'][d.depth] || '單位';
+    title = d.mode === 'add' ? `新增${lvl}` : `編輯${lvl}`; sub = d.mode === 'add' ? `上層：${d.parentName}` : (d.code || '');
+    body = `<div class="form-grid">
+      <label class="field full-2"><span>名稱 <b>*</b></span><input data-field="name" value="${esc(d.name)}"></label>
+      <label class="field"><span>代碼 <b>*</b></span><input data-field="code" class="mono" value="${esc(d.code)}" placeholder="${d.depth === 1 ? 'DIV-14' : 'U-141'}"></label>
+      ${d.mode === 'edit' && d.depth === 2 ? `<label class="field full"><span>所屬處（可移動）</span><select data-field="parent">${d.parents.map(p => opt(p.id, d.parent, p.name)).join('')}</select></label>` : ''}
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="orgsave">儲存</button>`;
+  }
+  return `<div class="modal-bg" data-act="dlgcancel"><div class="modal form" data-act="noop">
+    <div class="form-hd"><div><h3>${esc(title)}</h3><p>${esc(sub)}</p></div><button class="x" data-act="dlgcancel" aria-label="關閉">${svg(I.back, 16)}</button></div>
+    ${err}${ok}${body}<div class="form-ft">${foot}</div></div></div>`;
 }
 
 /* ------------------------------------------------------------------ 場景中心 */
@@ -723,22 +1040,23 @@ function viewSysScenarios() {
             <div style="font-size:12.5px;color:var(--body);margin-bottom:6px">${esc(s.desc)}</div>
             <div style="font-size:11.5px;color:var(--muted)">可用畫面：對練記錄・對練・統計　｜　版本 ${esc(meta.ver)}　｜　維護人 ${esc(meta.owner)}　｜　客戶畫像 ${s.personas.length} 個</div>
           </div>
-          <button class="btn-ghost" data-act="noop">編輯</button>
+          <button class="btn-ghost" data-act="editscn" data-arg="${s.id}">編輯</button>
         </div>`;
       }).join('')
     : `<div class="card"><table class="tbl">
-        <thead><tr><th>場景</th><th>對練 Agent</th><th>你的角色</th><th>預計時長</th><th class="num">狀態</th></tr></thead>
+        <thead><tr><th>場景</th><th>對練 Agent</th><th>iframe</th><th>你的角色</th><th>預計時長</th><th class="num">狀態</th><th></th></tr></thead>
         <tbody>${SCENARIOS.map(s => {
           const meta = SCENARIO_META[s.id];
           return `<tr><td><b>${esc(s.cn)}</b></td>
             <td class="mono" style="font-size:12px;color:var(--muted)">${esc(meta.agent)}</td>
+            <td class="mono" style="font-size:11.5px;color:${meta.embed ? 'var(--ink)' : 'var(--faint)'}">${meta.embed ? esc(embedSrc(meta.embed) || '已設定') : '未設定'}</td>
             <td>${esc(s.youRole.cn)}</td><td class="mono">${esc(s.duration)}</td>
-            <td class="num"><span class="pill" style="color:${meta.status === 'on' ? '#1E9E63' : '#7C8992'};background:${meta.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${meta.status === 'on' ? '已啟用' : '未啟用'}</span></td></tr>`;
+            <td class="num"><span class="pill" style="color:${meta.status === 'on' ? '#1E9E63' : '#7C8992'};background:${meta.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${meta.status === 'on' ? '已啟用' : '未啟用'}</span></td><td class="num"><button class="btn-ghost" data-act="editscn" data-arg="${s.id}" style="padding:6px 10px;font-size:12px">編輯</button></td></tr>`;
         }).join('')}</tbody></table></div>`;
 
   return `<div class="wrap">
     <div class="page-h"><h1>場景設定</h1><p>維護工作場景與對練 Agent；啟用後會出現在左側「工作場景」與場景中心。</p></div>
-    <div class="tabs">${tabs}</div>${body}</div>`;
+    <div class="tabs">${tabs}</div>${body}</div>${viewEditScenarioModal()}`;
 }
 
 function viewSysMembers() {
@@ -747,49 +1065,65 @@ function viewSysMembers() {
 
   let body = '';
   if (S.memberTab === 'members') {
-    body = `<div class="card"><table class="tbl">
-      <thead><tr><th>名稱</th><th>電子郵箱</th><th>角色</th><th>所屬單位</th><th>加入時間</th><th class="num">狀態</th></tr></thead>
-      <tbody>${MEMBERS.map(m => `<tr>
+    const q = S.memberSearch.trim().toLowerCase();
+    const rows = MEMBERS.filter(m => !q || (m.name + m.email + ROLES[m.role].cn + (UNITS[m.unit] || '')).toLowerCase().includes(q));
+    body = `<div class="filters" style="margin-bottom:14px">
+        <div class="inp">${svg(I.search, 15)}<input placeholder="搜尋姓名、郵箱、角色或單位…" data-act="memsearch" data-keep-focus="memsearch" value="${esc(S.memberSearch)}"></div>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn-ghost" data-act="apiopen">${svg(I.globe, 15)}API 同步</button>
+          <button class="btn-ghost" data-act="csvopen">${svg(I.doc, 15)}CSV 匯入</button>
+          <button class="btn-primary" data-act="memberopen" data-arg="">新增成員</button>
+        </div></div>
+      <div class="card"><table class="tbl">
+      <thead><tr><th>名稱</th><th>電子郵箱</th><th>角色</th><th>所屬單位</th><th>加入時間</th><th class="num">狀態</th><th class="num">操作</th></tr></thead>
+      <tbody>${rows.map(m => `<tr>
         <td><span style="display:inline-flex;align-items:center;gap:9px">
           <span style="width:28px;height:28px;border-radius:50%;background:${m.col};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">${esc(m.name[0])}</span>
-          <b>${esc(m.name)}</b></span></td>
-        <td style="color:var(--muted);font-size:12.5px">${esc(m.email)}</td>
+          <b>${esc(m.name)}</b>${m.id === S.user.id ? ' <span class="pill" style="color:var(--red);background:var(--red-soft)">我</span>' : ''}</span></td>
+        <td style="color:var(--muted);font-size:12.5px">${esc(m.email)}${m.synced ? `<div class="mono" style="font-size:10.5px;color:var(--faint)">altabots 同步 ${esc(m.synced)}</div>` : ''}</td>
         <td><span class="pill" style="color:var(--blue);background:#EDF3FB">${esc(ROLES[m.role].cn)}</span></td>
-        <td>${esc(UNITS[m.unit])}</td><td class="mono">${esc(m.joined)}</td>
+        <td>${esc(UNITS[m.unit] || '—')}</td><td class="mono">${esc(m.joined)}</td>
         <td class="num"><span class="pill" style="color:${m.active ? '#1E9E63' : '#7C8992'};background:${m.active ? '#EAF8F2' : '#F4F7F8'}">${m.active ? '啟用' : '停用'}</span></td>
+        <td class="num" style="white-space:nowrap"><button class="btn-ghost sm" data-act="memberopen" data-arg="${m.id}">編輯</button> <button class="btn-ghost sm" data-act="membertoggle" data-arg="${m.id}">${m.active ? '停用' : '啟用'}</button></td>
       </tr>`).join('')}</tbody></table>
-      <div class="tbl-foot">共 ${MEMBERS.length} 位成員</div></div>`;
+      <div class="tbl-foot">共 ${MEMBERS.length} 位成員${q ? `，符合搜尋 ${rows.length} 位` : ''}　·　正式版成員與角色繼承自 altabots 工作空間，此頁的新增與匯入作為補登與批次校正。</div></div>`;
   } else if (S.memberTab === 'roles') {
-    body = `<div class="card"><table class="tbl">
-      <thead><tr><th>角色</th><th>資料範圍</th><th>可用導覽</th><th class="num">成員數</th></tr></thead>
+    const chk = (k, key) => `<label class="chk"><input type="checkbox" data-roleperm="${k}:${key}" ${ROLE_PERMS[k][key] ? 'checked' : ''}></label>`;
+    body = `<div class="card"><table class="tbl roles">
+      <thead><tr><th>角色</th><th>資料範圍</th><th>我的數據</th><th>洞察分析</th><th>對練統計</th><th>場景設定</th><th>系統設定（全部）</th><th class="num">成員數</th></tr></thead>
       <tbody>${Object.keys(ROLES).map(k => {
-        const r = ROLES[k];
-        const fake = { role: k, unit: 'wm1', id: 'x' };
-        const navs = ['工作場景'];
-        navs.push(CAN.stats(fake) ? '數據洞察（我的數據・洞察分析）' : '數據洞察（我的數據）');
-        if (CAN.settings(fake)) navs.push('系統設定（全部）');
-        else if (CAN.scenarioSettings(fake)) navs.push('系統設定（場景設定）');
-        const scope = { all: '全行', team: '本人與下屬', self: '僅本人' }[r.scope];
+        const r = ROLES[k]; const locked = k === 'OWNER';
         return `<tr><td><b>${esc(r.cn)}</b> <span class="mono" style="color:var(--faint);font-size:11px">${k}</span></td>
-          <td><span class="pill" style="color:var(--purple);background:#F1EAFE">${scope}</span></td>
-          <td style="font-size:12.5px;color:var(--body)">${esc(navs.join('　·　'))}</td>
+          <td><select class="sel-sm" data-roleperm="${k}:scope" ${locked ? 'disabled' : ''}>${['all', 'team', 'self'].map(v => `<option value="${v}" ${r.scope === v ? 'selected' : ''}>${{ all: '全行', team: '本人與下屬', self: '僅本人' }[v]}</option>`).join('')}</select></td>
+          <td><span class="pill" style="color:#1E9E63;background:#EAF8F2">永遠可見（依資料範圍）</span></td>
+          <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'insights')}</td>
+          <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'stats')}</td>
+          <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'scenarioSettings')}</td>
+          <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'settings')}</td>
           <td class="num mono">${MEMBERS.filter(m => m.role === k).length}</td></tr>`;
-      }).join('')}</tbody></table></div>`;
+      }).join('')}</tbody></table>
+      <div class="tbl-foot">勾選即生效並保存。數據報表（我的數據、洞察分析、對練統計）與複盤報告的可見範圍都跟著此處的角色設定：資料範圍決定看得到誰的場次，洞察分析與對練統計決定能否進入主管模組。</div></div>`;
   } else {
     const node = (n, depth) => {
       const count = MEMBERS.filter(m => m.unit === n.id).length;
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;padding-left:${14 + depth * 26}px;border-bottom:1px solid var(--line2)">
+      const canAddChild = depth < 2; const canDel = depth > 0;
+      return `<div class="org-row" style="padding-left:${14 + depth * 26}px">
         <span style="font-size:13.5px;font-weight:${depth === 0 ? 700 : 600}">${esc(n.name)}</span>
         <span class="mono" style="font-size:11px;color:var(--faint)">${esc(n.code)}</span>
-        ${count ? `<span class="pill" style="margin-left:auto;color:var(--blue);background:#EDF3FB">${count} 位成員</span>` : ''}
+        ${count ? `<span class="pill" style="color:var(--blue);background:#EDF3FB">${count} 位成員</span>` : ''}
+        <span class="org-acts">
+          ${canAddChild ? `<button class="btn-ghost sm" data-act="orgadd" data-arg="${n.id}">新增${depth === 0 ? '處' : '單位'}</button>` : ''}
+          ${depth > 0 ? `<button class="btn-ghost sm" data-act="orgedit" data-arg="${n.id}">${depth === 2 ? '編輯／移動' : '編輯'}</button>` : ''}
+          ${canDel ? `<button class="btn-ghost sm danger" data-act="orgdel" data-arg="${n.id}">刪除</button>` : ''}
+        </span>
       </div>` + (n.children || []).map(c => node(c, depth + 1)).join('');
     };
-    body = `<div class="card">${node(ORG, 0)}<div class="tbl-foot">四層組織：事業群 → 處 → 單位 → 理專。主管的可視範圍為所屬「處」底下所有單位。</div></div>`;
+    body = `<div class="card">${node(ORG, 0)}<div class="tbl-foot">四層組織：事業群 → 處 → 單位 → 理專。主管的可視範圍為所屬「處」底下所有單位；單位可移動至其他處，有成員或子節點時不可刪除。</div></div>`;
   }
 
   return `<div class="wrap">
     <div class="page-h"><h1>成員權限</h1><p>管理系統成員、角色權限與組織配置。角色直接決定導覽與資料範圍。</p></div>
-    <div class="tabs">${tabs}</div>${body}</div>`;
+    <div class="tabs">${tabs}</div>${body}</div>${viewDlg()}`;
 }
 
 function viewSysAudit() {
@@ -931,6 +1265,23 @@ const ACTIONS = {
   gran: g => { S.statGran = g; render(); },
   settab: t => { S.settingsTab = t; render(); },
   memtab: t => { S.memberTab = t; render(); },
+  editscn: id => openEditScenario(id),
+  cancelscn: () => { S.editScenario = null; render(); },
+  savescn: () => saveEditScenario(),
+  dlgcancel: () => closeDlg(),
+  memberopen: id => openMember(id),
+  membersave: () => saveMember(),
+  membertoggle: id => toggleMember(id),
+  csvopen: () => openCsv(),
+  csvsample: () => { if (S.dlg) { S.dlg.draft.text = CSV_SAMPLE; S.dlg.draft.rows = null; render(); } },
+  csvparse: () => csvParse(),
+  csvimport: () => csvImport(),
+  apiopen: () => openApi(),
+  apisync: () => apiSync(),
+  orgadd: id => openOrg('add', id),
+  orgedit: id => openOrg('edit', id),
+  orgdel: id => deleteOrg(id),
+  orgsave: () => saveOrg(),
   noop: () => {},
 };
 
@@ -938,17 +1289,42 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act;
-  if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch') return;
+  if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch' || act === 'memsearch') return;
   const fn = ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el.dataset.arg); }
 });
 
 document.addEventListener('input', e => {
+  const f = e.target.closest('[data-field]');
+  if (f && S.dlg) {
+    const d = S.dlg.draft; const v = f.dataset.type === 'bool' ? f.value === 'true' : (f.type === 'checkbox' ? f.checked : f.value);
+    d[f.dataset.field] = v; if (S.dlg.kind === 'csv' && f.dataset.field === 'text') d.rows = null;
+    if (f.tagName === 'SELECT' && S.dlg.kind === 'member' && f.dataset.field === 'role') render();
+    return;
+  }
+  if (f && S.editScenario) {
+    const d = S.editScenario.draft;
+    if (f.dataset.field === 'diffs') {
+      const boxes = [...document.querySelectorAll('[data-field="diffs"]')];
+      d.diffs = boxes.filter(b => b.checked).map(b => b.value).join(',');
+    } else d[f.dataset.field] = f.value;
+    return;
+  }
   const el = e.target.closest('[data-act]');
   if (!el) return;
   if (el.dataset.act === 'hubsearch' || el.dataset.act === 'globalsearch') { S.hubSearch = el.value; render(); }
   else if (el.dataset.act === 'recsearch') { S.recSearch = el.value; render(); }
+  else if (el.dataset.act === 'memsearch') { S.memberSearch = el.value; render(); }
 });
+
+document.addEventListener('change', e => {
+  const rp = e.target.closest('[data-roleperm]');
+  if (rp) { const [role, key] = rp.dataset.roleperm.split(':'); setRolePerm(role, key, rp.type === 'checkbox' ? rp.checked : rp.value); return; }
+  const file = e.target.closest('[data-file="csv"]');
+  if (file && file.files && file.files[0] && S.dlg) { const fr = new FileReader(); fr.onload = () => { S.dlg.draft.text = String(fr.result || ''); csvParse(); }; fr.readAsText(file.files[0], 'utf-8'); return; }
+  const f = e.target.closest('[data-field]'); if (f) e.target.dispatchEvent(new Event('input', { bubbles: true }));
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); } });
 
 window.addEventListener('hashchange', () => {
   const prev = S.route;
@@ -966,5 +1342,7 @@ window.addEventListener('hashchange', () => {
   if (c) c.scrollTop = 0;
 });
 
+loadScenarioOverrides();
+loadOrgOverrides();
 S.route = parseHash();
 render();
