@@ -68,6 +68,7 @@ const prCol = (pr, target) => pr.pct == null ? 'var(--muted)' : (pr.pct >= targe
 
 /* ------------------------------------------------------------------ icons */
 const I = {
+  menu:  '<path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
   hub:   '<path d="M3 3h7.5v7.5H3zM13.5 3H21v7.5h-7.5zM3 13.5h7.5V21H3zM13.5 13.5H21V21h-7.5z" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/>',
   chart: '<path d="M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6M20 16v-2" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
   cog:   '<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M19.4 13a7.9 7.9 0 000-2l2-1.5-2-3.4-2.4 1a7.6 7.6 0 00-1.7-1L15 3H9l-.3 2.6a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.4L4.6 11a7.9 7.9 0 000 2l-2 1.5 2 3.4 2.4-1a7.6 7.6 0 001.7 1L9 21h6l.3-2.6a7.6 7.6 0 001.7-1l2.4 1 2-3.4z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
@@ -214,6 +215,8 @@ function viewSidebar() {
 function viewTopbar() {
   const u = S.user;
   return `<div class="topbar">
+    <button class="icon-btn nav-btn" data-act="navtoggle" aria-label="選單">${svg(I.menu, 20)}</button>
+    <div class="brand-m"><img src="assets/logo.png" alt=""><b>永豐AI對練</b></div>
     <button class="org-pick" data-act="noop">
       <span>永豐商業銀行</span><span class="sep">/</span><span>${esc(UNITS[u.unit] || '總行')}</span>${svg(I.chev, 15)}
     </button>
@@ -1303,7 +1306,7 @@ function viewNew(sc) {
     <div class="grid3" style="margin-bottom:28px">${personas}</div>
     <h2 style="font-family:'Noto Sans TC';font-size:16px;font-weight:700;margin-bottom:6px">調整對練難度</h2>
     <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px">預設沿用客戶畫像的難度，可依訓練目標調整。</p>
-    <div style="display:flex;gap:14px">${diffs}</div>
+    <div class="diff-row">${diffs}</div>
     <div class="actionbar">
       <div class="fields">
         <div class="f"><div class="l">客戶畫像</div><div class="v">${esc(sel.name)}</div></div>
@@ -1598,7 +1601,7 @@ function viewMe() {
     </div>
     <div class="card" style="margin-bottom:18px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">通過次數 ÷ 全部對練次數・目標依場景設定</div></div>
       <table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>單場通關判定</th><th class="num">對練次數</th><th class="num">通過</th><th class="num">通過率</th><th class="num">目標</th><th>狀態</th></tr></thead><tbody>${scPassRows || '<tr><td colspan="7" class="empty">尚無對練記錄</td></tr>'}</tbody></table></div>
-    <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:18px;align-items:start">
+    <div class="grid-me" style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:18px;align-items:start">
       <div class="card"><div class="card-h"><h2>得分趨勢</h2><div class="sub">SCORE TREND</div></div>
         <div class="card-b"><svg viewBox="0 0 620 200" style="width:100%;height:auto">
           <defs><linearGradient id="tf" x1="0" y1="0" x2="0" y2="1">
@@ -1934,9 +1937,10 @@ function render() {
       : viewNoPerm();
   }
 
-  root.innerHTML = `<div class="shell ${S.collapsed ? 'collapsed' : ''}">
-    ${viewSidebar()}
-    <div class="main">${viewTopbar()}${crumb}<div class="content">${content}</div></div>
+  const pcNote = r.name === 'sys' ? `<div class="pc-note">${svg(I.warn, 14)} 系統設定建議使用電腦版操作；手機上可瀏覽，表格可左右滑動。</div>` : '';
+  root.innerHTML = `<div class="shell ${S.collapsed ? 'collapsed' : ''} ${S.navOpen ? 'nav-open' : ''}">
+    ${viewSidebar()}<div class="nav-bg" data-act="navclose"></div>
+    <div class="main">${viewTopbar()}${crumb}<div class="content">${pcNote}${content}</div></div>
   </div>`;
 
   if (focusId) {
@@ -2103,6 +2107,7 @@ const ACTIONS = {
   pickpersona: id => { const sc = scenarioById(S.route.sc); S.personaId = id; const p = curPersona(sc); S.difficulty = p.diff; render(); },
   pickdiff: k => { S.difficulty = k; render(); },
   startcall: () => startCall(),
+  navtoggle: () => { S.navOpen = !S.navOpen; render(); }, navclose: () => { S.navOpen = false; render(); },
   askend: () => { S.confirmEnd = true; render(); },
   cancelend: () => { S.confirmEnd = false; render(); },
   doend: () => endCall(),
@@ -2222,6 +2227,7 @@ document.addEventListener('change', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); } });
 
 window.addEventListener('hashchange', () => {
+  S.navOpen = false;
   const prev = S.route;
   S.route = parseHash();
   if (prev.name === 'scenario' && prev.tab === 'call' && S.route.tab !== 'call') clearInterval(S.timer);

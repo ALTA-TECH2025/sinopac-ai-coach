@@ -526,3 +526,98 @@ table.tbl th .sort-ic { font-size: 10px; margin-left: 5px; opacity: .6; }
 /* Agent 對應：角色不可用／Agent 停用的提示 */
 .agent-note.bad { background: #FDECEC; color: #8A1C1C; border: 1px solid #F3C4C4; }
 .btn-primary:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+
+/* ---------------------------------------------------------------- H5 / 行動裝置適配 */
+.nav-btn, .brand-m, .nav-bg, .pc-note { display: none; }
+.diff-row { display: flex; gap: 14px; }
+@media (max-width: 760px) {
+  html, body { height: auto; min-height: 100%; }
+  .shell { height: auto; min-height: 100vh; overflow: visible; flex-direction: column; }
+  /* 側欄改為抽屜 */
+  .side { position: fixed; top: 0; bottom: 0; left: 0; width: min(82vw, 300px); z-index: 80; transform: translateX(-104%); transition: transform .22s ease; box-shadow: 0 0 40px rgba(0,0,0,.35); }
+  .shell.collapsed .side { width: min(82vw, 300px); }
+  .shell.nav-open .side { transform: none; }
+  .nav-bg { position: fixed; inset: 0; z-index: 70; background: rgba(8,20,18,.5); }
+  .shell.nav-open .nav-bg { display: block; }
+  .side-collapse { display: none; }
+  /* 頂欄 */
+  .topbar { position: sticky; top: 0; z-index: 40; padding: 0 10px; gap: 8px; height: 54px; }
+  .nav-btn { display: flex; }
+  .brand-m { display: flex; align-items: center; gap: 8px; }
+  .brand-m img { width: 24px; height: 24px; border-radius: 50%; }
+  .brand-m b { font-family: 'Noto Sans TC', sans-serif; font-size: 14.5px; font-weight: 800; }
+  .org-pick, .search, .icon-btn:not(.nav-btn) { display: none; }
+  .me { padding: 3px; } .me > span:not(.av) { display: none; }
+  .content { overflow: visible; }
+  .pc-note { display: flex; align-items: center; gap: 8px; margin: 12px 16px 0; padding: 10px 12px; border-radius: 10px; background: #FBEFD9; color: #7A4F0A; border: 1px solid #F0DBB0; font-size: 12.5px; line-height: 1.5; }
+  .crumb { padding: 10px 16px; flex-wrap: wrap; gap: 6px 8px; }
+  .crumb .perm { display: none; }
+  .wrap { padding: 16px; }
+  .page-h { margin-bottom: 14px; } .page-h h1 { font-size: 20px; flex-wrap: wrap; } .page-h p { font-size: 12.5px; }
+  .grid3, .grid2, .grid-me { grid-template-columns: 1fr !important; }
+  .kpis { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; }
+  .kpi { padding: 12px 14px; } .kpi .v { font-size: 20px; } .kpi .s { font-size: 11px; }
+  .filters { gap: 8px; margin-bottom: 14px; }
+  .filters .inp, .inp { min-width: 0; width: 100%; }
+  .filters > [style*="margin-left:auto"] { margin-left: 0 !important; width: 100%; }
+  .seg { overflow-x: auto; max-width: 100%; }
+  .seg button { white-space: nowrap; padding: 6px 10px; }
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tabs button { white-space: nowrap; padding: 10px 12px; font-size: 13px; }
+  /* 表格可橫向捲動 */
+  .card:has(> .tbl), .card:has(> table), .csv-prev { overflow-x: auto; }
+  .tbl { width: max-content; min-width: 100%; max-width: 1100px; }
+  .tbl td, .tbl th { min-width: 72px; }
+  .tbl th, .tbl td { padding: 9px 10px; font-size: 12.5px; }
+  .pr-strip { gap: 10px 18px; padding: 12px 14px; }
+  .pr-strip b { font-size: 18px; }
+  /* 發起對練 */
+  .diff-row { flex-direction: column; gap: 10px; }
+  .diff-card { padding: 12px 14px; }
+  .persona-card { padding: 14px; }
+  .actionbar { flex-direction: column; align-items: stretch; gap: 12px; padding: 12px 14px; border-radius: 13px; }
+  .actionbar .fields { justify-content: space-between; gap: 12px; }
+  .actionbar .btn-primary { width: 100%; justify-content: center; }
+  .agent-note { align-items: flex-start; margin: 0 0 14px; flex-wrap: wrap; }
+  .agent-note .mono { word-break: break-all; }
+  /* 對練中 */
+  .call-top { padding: 10px 14px; }
+  .call-top .l, .call-top .r { gap: 8px; }
+  .call-timer { font-size: 15px; }
+  .tip { margin: 4px 14px 0; max-width: calc(100% - 28px); }
+  .call-lines { padding: 14px 16px 6px; }
+  .call-line { font-size: 14.5px; margin-bottom: 14px; }
+  .call-ctl { gap: 14px; padding: 6px 0 18px calc(env(safe-area-inset-bottom)); }
+  .ctl { width: 42px; height: 42px; } .ctl.end { width: 58px; height: 58px; }
+  .speak-pill { padding: 8px 16px; font-size: 12px; }
+  /* 複盤報告 */
+  .report-hero { flex-direction: column-reverse; align-items: stretch; gap: 16px; padding: 18px 16px; }
+  .report-hero h1 { font-size: 19px; }
+  .report-hero .stats { flex-wrap: wrap; gap: 14px 22px; }
+  .ring-wrap { margin: 0 auto; }
+  .replay-ctl { flex-wrap: wrap; gap: 10px; padding: 12px 14px; }
+  .rp-track { flex-basis: 100%; order: 3; }
+  .replay-line .sp { width: 48px; }
+  /* 對話框 */
+  .modal-bg { padding: 10px; align-items: flex-end; }
+  .modal { padding: 20px 16px; }
+  .modal.form, .modal.form.wide { max-width: none; max-height: 94vh; padding: 16px 14px 14px; border-radius: 16px 16px 12px 12px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .field.full-2 { grid-column: 1 / -1; }
+  .modal.form .form-ft { flex-direction: column-reverse; }
+  .modal.form .form-ft .btn-primary, .modal.form .form-ft .btn-ghost { width: 100%; justify-content: center; }
+  .agents-hd { flex-wrap: wrap; gap: 8px; }
+  /* 登入頁 */
+  .gate { padding: 28px 14px; gap: 18px; }
+  .gate-card { padding: 20px 16px; }
+  .gate-role .rl { display: none; }
+  /* 操作記錄篩選列、組織列 */
+  .audit-filter { flex-wrap: wrap; }
+  .audit-filter > * { flex: 1 1 45%; min-width: 0; }
+  .org-acts { opacity: 1; }
+}
+@media (max-width: 420px) {
+  .kpis { grid-template-columns: 1fr 1fr !important; }
+  .kpi .v { font-size: 18px; }
+  .report-hero .stats .v { font-size: 16px; }
+}
