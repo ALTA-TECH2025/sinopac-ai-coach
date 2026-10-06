@@ -16,14 +16,14 @@ const I = {
       umbrella:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 3v2m0 0c-4.5 0-8 3-8 7h16c0-4-3.5-7-8-7zM12 12v6.5a2.2 2.2 0 01-4.4 0" stroke="#1F8FA0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     };
     return [
-      { id:'credit-revisit', cat:'credit', catCn:'信貸電銷 · Telesales', cn:'複訪（促成進件）', en:'Loan Follow-up Call', icon:I.card, tint:'#E4ECF7', c1:'#5C95D6', c2:'#2D6CC0', tag:'複訪', tagKind:'blue',
+      { id:'credit-revisit', cat:'credit', catCn:'信貸電銷 · Telesales', cn:'複訪', en:'Loan Follow-up Call', icon:I.card, tint:'#E4ECF7', c1:'#5C95D6', c2:'#2D6CC0', tag:'複訪', tagKind:'blue',
         desc:'客戶曾留資料或表達興趣但未送件；化解疑慮、補齊搜身資訊、促成進件。', duration:'3–8′', sessions:'真實場景', diffs:['L1','L2','L3'],
         youRole:{cn:'電銷專員', en:'Telesales Agent'},
         personas:[
           {id:'a1', name:'複訪 A1 · 上班族拖延 李先生', en:'Procrastinating Office Worker', init:'李', col:'#E0882E', risk:'受薪階級 · 年收入 80 萬', mood:'客氣、反覆拖延', temper:'35 歲上班族，國語。前次已留資料未送件，慣用「我再想想」「你 LINE 給我就好」。缺口：首通僅取得年收入，未問房貸與信用卡循環。', diff:'L2'},
           {id:'a2', name:'複訪 A2 · 台語疑似詐騙 陳先生', en:'Suspicious Senior Business Owner', init:'陳', col:'#D81E26', risk:'自營商 · 中高齡', mood:'高度懷疑、須家人參與', temper:'58 歲自營商，台語。懷疑來電是詐騙、要打去總行問，決策須與兒子討論。缺口：記得利率 2.6%，誤以為是保證核准條件。', diff:'L3'},
         ] },
-      { id:'credit-bargain', cat:'credit', catCn:'信貸電銷 · Telesales', cn:'議價（守住定價、保住案件）', en:'Loan Pricing Negotiation', icon:I.coin, tint:'#FCE7E6', c1:'#EE6A60', c2:'#D81E26', tag:'議價', tagKind:'red',
+      { id:'credit-bargain', cat:'credit', catCn:'信貸電銷 · Telesales', cn:'議價', en:'Loan Pricing Negotiation', icon:I.coin, tint:'#FCE7E6', c1:'#EE6A60', c2:'#D81E26', tag:'議價', tagKind:'red',
         desc:'客戶已進件或核准但對利率、額度、費用不滿；在定價政策內說服接受並促成撥款。', duration:'3–8′', sessions:'真實場景', diffs:['L1','L2','L3'],
         youRole:{cn:'電銷專員', en:'Telesales Agent'},
         personas:[
@@ -145,8 +145,8 @@ export const ANALYTICS = {
         {rank:5, name:'范小美', dept:'電話金融', score:86.7},
       ],
       recent:[
-        {sc:'複訪（促成進件）', pe:'複訪 A1 · 上班族拖延 李先生', df:'L2', score:86, date:'今天 14:32', dur:'6′12″'},
-        {sc:'議價（守住定價、保住案件）', pe:'議價 B1 · 精算比價 林小姐', df:'L2', score:84, date:'今天 11:05', dur:'7′40″'},
+        {sc:'複訪', pe:'複訪 A1 · 上班族拖延 李先生', df:'L2', score:86, date:'今天 14:32', dur:'6′12″'},
+        {sc:'議價', pe:'議價 B1 · 精算比價 林小姐', df:'L2', score:84, date:'今天 11:05', dur:'7′40″'},
         {sc:'銀行話務', pe:'咆哮取消電銷 · 黃先生', df:'complaint', score:79, date:'昨天 16:48', dur:'5′55″'},
         {sc:'信用卡話務', pe:'臨調額度 · 陳大明先生', df:'complaint', score:85, date:'昨天 10:20', dur:'5′20″'},
         {sc:'銀行話務', pe:'高齡客戶 · 何爺爺', df:'normal', score:90, date:'09-28', dur:'6′12″'},
