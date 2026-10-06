@@ -148,10 +148,10 @@ function viewSidebar() {
   }
 
   const statsGroup = CAN.stats(S.user)
-    ? `<div class="nav-group">統計測量</div>
+    ? `<div class="nav-group">數據洞察</div>
        ${navItem('#/me', I.chart, '我的數據', { on: r.name === 'me' })}
        ${navItem('#/insights', I.clock, '洞察分析', { on: r.name === 'insights' })}`
-    : `<div class="nav-group">統計測量</div>${navItem('#/me', I.chart, '我的數據', { on: r.name === 'me' })}`;
+    : `<div class="nav-group">數據洞察</div>${navItem('#/me', I.chart, '我的數據', { on: r.name === 'me' })}`;
 
   const sysGroup = CAN.settings(S.user)
     ? `<div class="nav-group">系統設定</div>
@@ -766,7 +766,7 @@ function viewSysMembers() {
         const r = ROLES[k];
         const fake = { role: k, unit: 'wm1', id: 'x' };
         const navs = ['工作場景'];
-        navs.push(CAN.stats(fake) ? '統計測量（我的數據・洞察分析）' : '統計測量（我的數據）');
+        navs.push(CAN.stats(fake) ? '數據洞察（我的數據・洞察分析）' : '數據洞察（我的數據）');
         if (CAN.settings(fake)) navs.push('系統設定（全部）');
         else if (CAN.scenarioSettings(fake)) navs.push('系統設定（場景設定）');
         const scope = { all: '全行', team: '本人與下屬', self: '僅本人' }[r.scope];
