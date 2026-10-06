@@ -439,3 +439,29 @@ table.tbl.roles .chk input { width: 16px; height: 16px; accent-color: var(--red)
 .org-row .org-acts { margin-left: auto; display: flex; gap: 6px; opacity: .25; transition: opacity .15s; }
 .org-row:hover .org-acts { opacity: 1; }
 .org-row .pill { margin-left: 4px; }
+
+/* ---------------------------------------------------------------- 評分中 / 語音回放 */
+.spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--line); border-top-color: var(--red); animation: spin .8s linear infinite; display: inline-block; flex-shrink: 0; }
+.spin.big { width: 34px; height: 34px; border-width: 3.5px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.eval-box { display: flex; align-items: center; gap: 14px; background: #FBEFD9; border: 1px solid #F0DBB0; color: #7A4F0A; border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; font-size: 13.5px; }
+.eval-box .sub { font-size: 12px; color: #9A6A1C; margin-top: 3px; font-weight: 400; }
+.ring-wrap.pending .num s { color: var(--muted); }
+.replay-line { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; transition: background .15s, border-color .15s; }
+.replay-line:hover { background: var(--soft); }
+.replay-line.on { background: var(--red-soft); border-color: #F0B0B4; }
+.replay-line.on .t, .replay-line.on .sp { color: var(--red) !important; }
+.replay-line .who-tag { margin-left: auto; font-size: 10.5px; color: var(--faint); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; align-self: center; }
+.replay-ctl { display: flex; align-items: center; gap: 12px; padding: 14px 18px 16px; border-top: 1px solid var(--line2); }
+.rp-btn { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(145deg, #E5342B, #C00E1A); color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px rgba(216,30,38,.25); flex-shrink: 0; }
+.rp-btn svg { stroke: #fff; fill: #fff; margin-left: 2px; }
+.rp-btn .pause { display: flex; gap: 4px; } .rp-btn .pause i { display: block; width: 4px; height: 14px; background: #fff; border-radius: 2px; }
+.rp-track { flex: 1; height: 8px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; overflow: hidden; }
+.rp-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: linear-gradient(90deg, #E5342B, #C00E1A); transition: width .2s linear; }
+.rp-time { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.rp-voice { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; color: var(--muted); background: var(--panel); }
+.rp-voice.on { color: #1E9E63; border-color: #BEE5E0; background: #EAF8F2; }
+.rp-voice:disabled { opacity: .5; cursor: not-allowed; }
+.rp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); margin-left: 4px; }
+.rp-dot.on { background: #1E9E63; box-shadow: 0 0 0 4px rgba(30,158,99,.18); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(30,158,99,.08); } }

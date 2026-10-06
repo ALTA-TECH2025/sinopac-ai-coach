@@ -23,6 +23,8 @@ const S = {
   editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
   dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
   memberSearch: '',
+  replay: { sessionId: null, time: 0, playing: false, voice: true, timer: null, lastIdx: -1 },
+  scoringTimers: {},
 };
 
 // 難度集合依應用設定：信貸電銷 L1／L2／L3，客服話務 一般／客訴；每個場景以 diffs 指定可用集合
@@ -599,12 +601,12 @@ function viewRecords(sc) {
          <span class="pill" style="color:${scoreCol(r.score)};background:${scoreCol(r.score)}1f;margin-left:7px">${grade(r.score)}</span>`
       : r.status === 'evaluating'
         ? '<span class="pill" style="color:#B5740F;background:#FBEFD9">正在評估中</span>'
-        : '<span class="pill" style="color:#667085;background:#F4F7F8">暫無評分</span>';
+        : `<span class="pill" style="color:#667085;background:#F4F7F8">暫無評分</span> <button class="btn-ghost sm" data-act="rescore" data-arg="${r.id}" title="重新評分">↻</button>`;
     const mid = full
       ? `<td>${esc(m.name || '—')}</td><td>${esc(UNITS[m.unit] || '—')}</td>`
       : '';
-    return `<tr class="${r.status === 'done' ? 'clickable' : ''}"
-        ${r.status === 'done' ? `data-act="goto" data-arg="#/s/${sc.id}/report/${r.id}"` : ''}>
+    return `<tr class="${r.status !== 'no_score' ? 'clickable' : ''}"
+        ${r.status !== 'no_score' ? `data-act="goto" data-arg="#/s/${sc.id}/report/${r.id}"` : ''}>
       <td class="mono">${esc(r.date)}</td>
       <td><b>${esc(r.pe)}</b></td>
       <td><span class="pill" style="color:${d.col};background:${d.col}1f">${d.cn}</span></td>
@@ -768,25 +770,41 @@ function viewCall(sc) {
 
 /* ------------------------------------------------------------------ 場景：複盤報告 */
 function viewReport(sc, sessionId) {
-  const session = SESSIONS.find(s => s.id === sessionId) || S.liveSession;
+  const session = SESSIONS.find(s => s.id === sessionId);
   if (!session) return `<div class="wrap"><div class="card empty">找不到這筆對練記錄。</div></div>`;
 
   const rc = reportFor(sc.id);
-  const overall = session.score == null ? 86 : session.score;
-  const d = DIFF[session.diff];
+  const evaluating = session.status === 'evaluating';
+  const overall = session.score == null ? 0 : session.score;
+  const d = DIFF[session.diff] || DIFF.L2;
   const m = memberById(session.member) || S.user;
   const C = 2 * Math.PI * 68;
+  const allLines = transcriptFor(sc.id).slice(0, session.reveal || undefined);
+  const compliance = session.compliance != null ? session.compliance : allLines.filter(l => l.flag === 'compliance').length;
+  const words = session.words != null ? session.words : allLines.reduce((n, l) => n + l.t.replace(/\s/g, '').length, 0);
+  const dimsSrc = session.dims || rc.dims;
 
-  const dims = rc.dims.map(x => `<div class="dim">
+  const dims = dimsSrc.map(x => `<div class="dim">
     <div class="hd"><div><span class="cn">${esc(x.cn)}</span><span class="en">${esc(x.en)}</span></div>
       <span class="sc" style="color:${scoreCol(x.score)}">${x.score}</span></div>
     <div class="bar-track"><div class="bar-fill" style="width:${x.score}%;background:linear-gradient(90deg,${scoreCol(x.score)}99,${scoreCol(x.score)})"></div></div>
     <div class="note">${esc(x.note)}</div></div>`).join('');
 
-  const lines = replayLines(sc.id).map(l => `<div class="replay-line">
+  const rp = replayFor(session); const rl = replayLines(sc.id); const total = replayTotal(session, rl); const actIdx = activeLineIdx(rl, rp.time);
+  const shownCount = session.reveal || rl.length;
+  const lines = rl.slice(0, shownCount).map((l, i) => `<div class="replay-line ${i === actIdx ? 'on' : ''}" data-act="replayseek" data-arg="${l.at}">
       <span class="t mono">${fmt(l.at)}</span>
       <span class="sp" style="color:${l.who === 'cust' ? 'var(--ink2)' : 'var(--blue)'}">${l.who === 'cust' ? esc(session.pe.split('·').pop().trim()) : esc(m.name)}</span>
-      <span class="tx">${esc(l.text)}</span></div>`).join('');
+      <span class="tx">${esc(l.text)}</span>${l.who === 'cust' ? '' : `<span class="who-tag">你</span>`}</div>`).join('');
+  const voiceOk = 'speechSynthesis' in window;
+  const replayCtl = `<div class="replay-ctl">
+      <button class="rp-btn ${rp.playing ? 'on' : ''}" data-act="replaytoggle" aria-label="${rp.playing ? '暫停' : '播放'}">${rp.playing ? '<span class="pause"><i></i><i></i></span>' : svg(I.play, 18)}</button>
+      <div class="rp-track" data-act="replaybar" id="rp-track"><div class="rp-fill" id="rp-fill" style="width:${(rp.time / total * 100).toFixed(1)}%"></div></div>
+      <span class="mono rp-time"><span id="rp-cur">${fmt(Math.floor(rp.time))}</span> / ${fmt(Math.floor(total))}</span>
+      <button class="rp-voice ${rp.voice ? 'on' : ''}" data-act="replayvoice" title="${voiceOk ? '以瀏覽器語音朗讀逐字稿' : '此瀏覽器不支援語音朗讀'}" ${voiceOk ? '' : 'disabled'}>${svg(I.globe, 14)} ${rp.voice ? '朗讀中' : '靜音'}</button>
+      <span class="rp-dot ${rp.playing ? 'on' : ''}"></span><span style="font-size:11.5px;color:var(--muted)">${rp.playing ? '回放中' : '錄音回放'}</span>
+    </div>`;
+  const evalHero = evaluating ? `<div class="eval-box"><span class="spin"></span><div><b>評估 Agent 評分中…</b><div class="sub">依本場景的評分規則逐句分析，約需數秒；完成後本頁自動更新。</div></div></div>` : '';
 
   return `<div class="wrap">
     <div class="card report-hero" style="margin-bottom:18px">
@@ -800,33 +818,35 @@ function viewReport(sc, sessionId) {
         </div>
         <div class="stats">
           <div><div class="v">${esc(session.dur)}</div><div class="l">對練時長</div></div>
-          <div><div class="v">1,284</div><div class="l">對話字數</div></div>
-          <div><div class="v" style="color:var(--red)">1</div><div class="l">合規提醒</div></div>
+          <div><div class="v">${words.toLocaleString()}</div><div class="l">對話字數</div></div>
+          <div><div class="v" style="color:${compliance ? 'var(--red)' : '#1E9E63'}">${compliance}</div><div class="l">合規提醒</div></div>
           <div><div class="v" style="font-size:14px;color:var(--muted)">${esc(session.date)}</div><div class="l">完成時間</div></div>
         </div>
       </div>
-      <div class="ring-wrap">
+      <div class="ring-wrap ${evaluating ? 'pending' : ''}">
         <svg width="150" height="150" viewBox="0 0 150 150">
           <circle cx="75" cy="75" r="68" fill="none" stroke="var(--line2)" stroke-width="11"/>
-          <circle cx="75" cy="75" r="68" fill="none" stroke="${scoreCol(overall)}" stroke-width="11" stroke-linecap="round"
-            stroke-dasharray="${(C * overall / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 75 75)"/>
+          ${evaluating ? '' : `<circle cx="75" cy="75" r="68" fill="none" stroke="${scoreCol(overall)}" stroke-width="11" stroke-linecap="round"
+            stroke-dasharray="${(C * overall / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 75 75)"/>`}
         </svg>
-        <div class="num"><b style="color:${scoreCol(overall)}">${overall}</b><s>／100</s>
-          <s style="color:${scoreCol(overall)};font-weight:700;margin-top:6px">${grade(overall)}</s></div>
+        <div class="num">${evaluating ? `<span class="spin big"></span><s style="margin-top:8px">評分中</s>` : `<b style="color:${scoreCol(overall)}">${overall}</b><s>／100</s>
+          <s style="color:${scoreCol(overall)};font-weight:700;margin-top:6px">${grade(overall)}</s>`}</div>
       </div>
     </div>
+    ${evalHero}
 
-    <div class="grid2" style="margin-bottom:18px;align-items:start">
+    ${evaluating ? '' : `<div class="grid2" style="margin-bottom:18px;align-items:start">
       <div class="card"><div class="card-h"><h2>能力維度評分</h2><div class="sub">COMPETENCY BREAKDOWN</div></div>
         <div class="card-b">${dims}</div></div>
       <div style="display:flex;flex-direction:column;gap:16px">
         <div class="list-good"><h3>${svg(I.check, 16)}表現亮點</h3><ul>${rc.strengths.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
         <div class="list-bad"><h3>${svg(I.warn, 16)}待提升項</h3><ul>${rc.improves.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
       </div>
-    </div>
+    </div>`}
 
-    <div class="card"><div class="card-h"><h2>記錄詳情</h2><div class="sub">TRANSCRIPT</div></div>
-      <div class="card-b">${lines}</div></div>
+    <div class="card"><div class="card-h"><h2>記錄詳情</h2><div class="sub">AUDIO TRANSCRIPT　·　點任一句可跳至該時間點</div></div>
+      <div class="card-b" id="replay-lines">${lines}</div>
+      ${replayCtl}</div>
 
     <div style="display:flex;gap:10px;margin-top:18px">
       <button class="btn-ghost" data-act="goto" data-arg="#/s/${sc.id}/records">返回對練記錄</button>
@@ -1224,10 +1244,13 @@ function startCall() {
   const p = curPersona(sc);
   clearInterval(S.timer);
   S.reveal = 1; S.elapsed = 0; S.confirmEnd = false;
+  const now = new Date(); const pad = n => String(n).padStart(2, '0');
   S.liveSession = {
-    id: 'live' + Date.now().toString(16).slice(-10), sc: sc.id, pe: p.name,
-    diff: S.difficulty, member: S.user.id, date: '剛剛', dur: '0′00″', score: 86, status: 'done',
+    id: Date.now().toString(16).slice(-10) + Math.random().toString(16).slice(2, 8), sc: sc.id, pe: p.name,
+    diff: S.difficulty, member: S.user.id, date: `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    dur: '0′00″', durationSec: 0, score: null, status: 'live', live: true,
   };
+  audit('發起對練', `${S.liveSession.id.slice(0, 8)} ${sc.cn}・${p.name}`, '對練場景');
   go(`#/s/${sc.id}/call`);
   const lines = transcriptFor(sc.id);
   let tick = 0;
@@ -1239,16 +1262,110 @@ function startCall() {
   }, 1000);
 }
 
+/* ---- 對練場次：結束 → 評分中 → 完成（模擬評估 Agent，約 4 秒回傳） ---- */
+const SCORING_DELAY_MS = 4000;
+function simulateScore(session) {
+  // 以該場景的示範維度為基礎，依對話完成度與難度微調；同一場次重算結果相同
+  const rc = reportFor(session.sc); const lines = transcriptFor(session.sc);
+  const covered = Math.max(1, Math.min(lines.length, session.reveal || lines.length)) / lines.length;
+  let seed = 0; for (const ch of session.id) seed = (seed * 31 + ch.charCodeAt(0)) % 9973;
+  const jitter = (seed % 9) - 4;                                   // -4 … +4
+  const diffAdj = { L1: 3, L2: 0, L3: -3, normal: 2, complaint: -2 }[session.diff] || 0;
+  const dims = rc.dims.map((d, i) => {
+    const s = Math.round(d.score * (0.82 + 0.18 * covered) + jitter + diffAdj + ((seed >> i) % 3) - 1);
+    return { cn: d.cn, en: d.en, score: Math.max(55, Math.min(98, s)), note: d.note };
+  });
+  const overall = Math.round(dims.reduce((x, d) => x + d.score, 0) / dims.length);
+  const shown = lines.slice(0, session.reveal || lines.length);
+  const compliance = shown.filter(l => l.flag === 'compliance').length;
+  const words = shown.reduce((n, l) => n + l.t.replace(/\s/g, '').length, 0);
+  return { overall, dims, compliance, words };
+}
+function finishScoring(id) {
+  const s = SESSIONS.find(x => x.id === id); if (!s || s.status !== 'evaluating') return;
+  const r = simulateScore(s);
+  Object.assign(s, { status: 'done', score: r.overall, dims: r.dims, compliance: r.compliance, words: r.words, scoredAt: Date.now() });
+  persistSessions(); audit('完成對練', `${s.id.slice(0, 8)} ${scenarioById(s.sc) ? scenarioById(s.sc).cn : s.sc}・已評分（${s.score}）`, '對練場景');
+  delete S.scoringTimers[id];
+  const r0 = S.route; if (r0.name === 'scenario' && (r0.tab === 'records' || (r0.tab === 'report' && r0.arg === id))) render();
+  else if (r0.name === 'me' || r0.name === 'hub') render();
+}
+function scheduleScoring(id) { clearTimeout(S.scoringTimers[id]); S.scoringTimers[id] = setTimeout(() => finishScoring(id), SCORING_DELAY_MS); }
+function rescoreSession(id) {
+  const s = SESSIONS.find(x => x.id === id); if (!s) return;
+  s.status = 'evaluating'; s.score = null; persistSessions(); audit('重新評分', `${s.id.slice(0, 8)} ${s.pe}`, '對練場景'); scheduleScoring(id); render();
+}
+const LS_SESSIONS = 'sinopac-coach.sessions';
+function persistSessions() { lsSet(LS_SESSIONS, SESSIONS.filter(s => s.userMade)); }
+function loadSessions() {
+  const saved = lsGet(LS_SESSIONS); if (!Array.isArray(saved)) return;
+  saved.forEach(s => { if (!SESSIONS.some(x => x.id === s.id)) SESSIONS.unshift(s); });
+  // 關閉頁面時還在評分中的場次，載入後直接補完評分
+  SESSIONS.filter(s => s.userMade && s.status === 'evaluating').forEach(s => scheduleScoring(s.id));
+}
+
 function endCall() {
   clearInterval(S.timer);
   const sc = scenarioById(S.route.sc);
-  if (S.liveSession) {
-    const m = Math.floor(S.elapsed / 60), s = S.elapsed % 60;
-    S.liveSession.dur = `${m}′${String(s).padStart(2, '0')}″`;
-  }
+  const live = S.liveSession;
   S.confirmEnd = false;
-  go(`#/s/${sc.id}/report/${S.liveSession ? S.liveSession.id : ''}`);
+  if (!live) { go(`#/s/${sc.id}/records`); return; }
+  const m = Math.floor(S.elapsed / 60), s = S.elapsed % 60;
+  Object.assign(live, { dur: `${m}′${String(s).padStart(2, '0')}″`, durationSec: S.elapsed, reveal: S.reveal, status: 'evaluating', live: false, userMade: true });
+  if (!SESSIONS.some(x => x.id === live.id)) SESSIONS.unshift(live);
+  persistSessions(); scheduleScoring(live.id);
+  S.liveSession = null;
+  go(`#/s/${sc.id}/report/${live.id}`);
 }
+
+/* ---- 語音回放（計時推進 + 瀏覽器語音朗讀） ---- */
+function replayTotal(session, lines) { const shown = lines.slice(0, session.reveal || lines.length); const last = shown.length ? shown[shown.length - 1].at : 0; return Math.max(session.durationSec || 0, last + 24); }
+function replayVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  const vs = window.speechSynthesis.getVoices(); return vs.find(v => /zh[-_]TW/i.test(v.lang)) || vs.find(v => /^zh/i.test(v.lang)) || null;
+}
+function speakLine(line, session) {
+  if (!S.replay.voice || !('speechSynthesis' in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(line.text); u.lang = 'zh-TW'; const v = replayVoice(); if (v) u.voice = v;
+    u.rate = 1.05; u.pitch = line.who === 'cust' ? 1.15 : 0.9; window.speechSynthesis.speak(u);
+  } catch (e) { /* 無語音引擎時忽略 */ }
+}
+function replayStop(keepTime) {
+  clearInterval(S.replay.timer); S.replay.timer = null; S.replay.playing = false;
+  if (!keepTime) { S.replay.time = 0; S.replay.lastIdx = -1; }
+  if ('speechSynthesis' in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
+}
+function replayFor(session) { if (S.replay.sessionId !== session.id) { replayStop(false); S.replay.sessionId = session.id; } return S.replay; }
+function activeLineIdx(lines, t) { let idx = -1; lines.forEach((l, i) => { if (t >= l.at) idx = i; }); return idx; }
+function replayTick(session, lines) {
+  const rp = S.replay; const total = replayTotal(session, lines);
+  rp.time = Math.min(total, rp.time + 0.25);
+  const idx = activeLineIdx(lines, rp.time);
+  if (idx !== rp.lastIdx) { rp.lastIdx = idx; if (idx >= 0) speakLine(lines[idx], session); }
+  // 只更新畫面上會變的部分，避免整頁重繪
+  const bar = document.getElementById('rp-fill'); if (bar) bar.style.width = (rp.time / total * 100).toFixed(1) + '%';
+  const cur = document.getElementById('rp-cur'); if (cur) cur.textContent = fmt(Math.floor(rp.time));
+  document.querySelectorAll('.replay-line').forEach((el, i) => el.classList.toggle('on', i === idx));
+  const act = document.querySelector('.replay-line.on'); if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  if (rp.time >= total) { replayStop(true); render(); }
+}
+function replayToggle(session) {
+  const rp = replayFor(session); const lines = replayLines(session.sc);
+  if (rp.playing) { replayStop(true); render(); return; }
+  if (rp.time >= replayTotal(session, lines)) { rp.time = 0; rp.lastIdx = -1; }
+  rp.playing = true; rp.lastIdx = activeLineIdx(lines, rp.time) - 1;
+  rp.timer = setInterval(() => replayTick(session, lines), 250); render();
+}
+function replaySeek(session, sec) {
+  const rp = replayFor(session); const lines = replayLines(session.sc);
+  rp.time = Math.max(0, Math.min(replayTotal(session, lines), sec)); rp.lastIdx = activeLineIdx(lines, rp.time) - 1;
+  if (!rp.playing) { rp.lastIdx = activeLineIdx(lines, rp.time); if (rp.lastIdx >= 0) speakLine(lines[rp.lastIdx], session); }
+  render();
+}
+
+function currentReportSession() { const r = S.route; if (r.name !== 'scenario' || r.tab !== 'report') return null; return SESSIONS.find(s => s.id === r.arg) || null; }
 
 const ACTIONS = {
   login: id => { S.user = memberById(id); go('#/hub'); render(); },
@@ -1282,6 +1399,11 @@ const ACTIONS = {
   orgedit: id => openOrg('edit', id),
   orgdel: id => deleteOrg(id),
   orgsave: () => saveOrg(),
+  rescore: id => rescoreSession(id),
+  replaytoggle: () => { const s = currentReportSession(); if (s) replayToggle(s); },
+  replayseek: sec => { const s = currentReportSession(); if (s) replaySeek(s, Number(sec)); },
+  replayvoice: () => { S.replay.voice = !S.replay.voice; if (!S.replay.voice && 'speechSynthesis' in window) { try { window.speechSynthesis.cancel(); } catch (e) {} } render(); },
+  replaybar: () => {},
   noop: () => {},
 };
 
@@ -1290,6 +1412,7 @@ document.addEventListener('click', e => {
   if (!el) return;
   const act = el.dataset.act;
   if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch' || act === 'memsearch') return;
+  if (act === 'replaybar') { const s = currentReportSession(); if (s) { const rect = el.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)); replaySeek(s, ratio * replayTotal(s, replayLines(s.sc))); } e.preventDefault(); return; }
   const fn = ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el.dataset.arg); }
 });
@@ -1330,6 +1453,7 @@ window.addEventListener('hashchange', () => {
   const prev = S.route;
   S.route = parseHash();
   if (prev.name === 'scenario' && prev.tab === 'call' && S.route.tab !== 'call') clearInterval(S.timer);
+  if (!(S.route.name === 'scenario' && S.route.tab === 'report')) replayStop(false);
   if (S.route.name === 'scenario') {
     const sc = scenarioById(S.route.sc);
     if (sc && (prev.sc !== S.route.sc || S.personaId == null)) {
@@ -1344,5 +1468,6 @@ window.addEventListener('hashchange', () => {
 
 loadScenarioOverrides();
 loadOrgOverrides();
+loadSessions();
 S.route = parseHash();
 render();
