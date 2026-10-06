@@ -19,6 +19,7 @@ const S = {
   personaId: null, difficulty: 'L2',
   reveal: 0, elapsed: 0, confirmEnd: false, timer: null,
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
+  range: { gran: '月', anchor: '', from: '', to: '' },   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
   liveSession: null,
   editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
   dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
@@ -65,6 +66,63 @@ function passRate(rows) { const n = rows.length; const k = rows.filter(r => sess
 function passRateText(pr, target) { return pr.pct == null ? '—' : `${pr.pct}%`; }
 function passRateSub(pr, target) { return pr.pct == null ? `尚無對練・目標 ${target}%` : `${pr.k}／${pr.n} 次・目標 ${target}%${pr.pct >= target ? '・已達標' : `・差 ${target - pr.pct}%`}`; }
 const prCol = (pr, target) => pr.pct == null ? 'var(--muted)' : (pr.pct >= target ? '#1E9E63' : '#D81E26');
+
+/* ------------------------------------------------------------------ 時間區間（對練記錄、對練統計、我的數據、洞察分析共用） */
+const RANGE_GRANS = ['日', '週', '月', '季', '年', '自選', '全部'];
+const pad2 = n => String(n).padStart(2, '0');
+const dKey = d => `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+function dParse(k) { const m = String(k || '').slice(0, 10).split(/[\/-]/).map(Number); return (m.length === 3 && m.every(Number.isFinite)) ? new Date(m[0], m[1] - 1, m[2]) : new Date(); }
+function rangeAnchor() { if (!S.range.anchor) S.range.anchor = dKey(new Date()); return dParse(S.range.anchor); }
+function rangeBounds() {
+  const r = S.range; const a = rangeAnchor(); let from, to, label;
+  if (r.gran === '日') { from = to = a; label = dKey(a); }
+  else if (r.gran === '週') { const dow = (a.getDay() + 6) % 7; from = new Date(a); from.setDate(a.getDate() - dow); to = new Date(from); to.setDate(from.getDate() + 6); label = `${dKey(from)} 當週`; }
+  else if (r.gran === '月') { from = new Date(a.getFullYear(), a.getMonth(), 1); to = new Date(a.getFullYear(), a.getMonth() + 1, 0); label = `${a.getFullYear()} 年 ${a.getMonth() + 1} 月`; }
+  else if (r.gran === '季') { const q = Math.floor(a.getMonth() / 3); from = new Date(a.getFullYear(), q * 3, 1); to = new Date(a.getFullYear(), q * 3 + 3, 0); label = `${a.getFullYear()} 年 Q${q + 1}`; }
+  else if (r.gran === '年') { from = new Date(a.getFullYear(), 0, 1); to = new Date(a.getFullYear(), 11, 31); label = `${a.getFullYear()} 年`; }
+  else if (r.gran === '自選') { from = r.from ? dParse(r.from) : null; to = r.to ? dParse(r.to) : null; label = `${from ? dKey(from) : '不限'} – ${to ? dKey(to) : '不限'}`; return { from: from && dKey(from), to: to && dKey(to), label, text: label }; }
+  else return { from: null, to: null, label: '全部期間', text: '全部期間' };
+  return { from: dKey(from), to: dKey(to), label, text: from.getTime() === to.getTime() ? dKey(from) : `${dKey(from)} – ${dKey(to)}` };
+}
+function inRange(sess) {
+  const b = rangeBounds(); const k = String(sess.date || '').slice(0, 10).replace(/-/g, '/');
+  if (!/^\d{4}\/\d{2}\/\d{2}$/.test(k)) return true;
+  return (!b.from || k >= b.from) && (!b.to || k <= b.to);
+}
+function rangeShift(dir) {
+  const r = S.range; const a = rangeAnchor();
+  if (r.gran === '日') a.setDate(a.getDate() + dir); else if (r.gran === '週') a.setDate(a.getDate() + 7 * dir);
+  else if (r.gran === '月') a.setMonth(a.getMonth() + dir); else if (r.gran === '季') a.setMonth(a.getMonth() + 3 * dir); else if (r.gran === '年') a.setFullYear(a.getFullYear() + dir);
+  r.anchor = dKey(a);
+}
+function setRangeGran(g) {
+  if (!RANGE_GRANS.includes(g)) return; S.range.gran = g;
+  if (g === '自選' && !S.range.from && !S.range.to) { const t = new Date(); S.range.from = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-01`; S.range.to = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`; }
+}
+function viewRangeBar(note) {
+  const r = S.range; const b = rangeBounds(); const fixed = ['日', '週', '月', '季', '年'].includes(r.gran);
+  const err = r.gran === '自選' && r.from && r.to && dParse(r.from) > dParse(r.to) ? '<span class="range-err">起日不可晚於迄日</span>' : '';
+  return `<div class="range-bar">
+    <div class="seg">${RANGE_GRANS.map(g => `<button class="${r.gran === g ? 'on' : ''}" data-act="rangegran" data-arg="${g}">${g}</button>`).join('')}</div>
+    ${fixed ? `<div class="range-nav"><button class="rng-btn" data-act="rangeprev" aria-label="上一期">${svg(I.left, 15)}</button><b>${esc(b.label)}</b><button class="rng-btn" data-act="rangenext" aria-label="下一期">${svg(I.right, 15)}</button><button class="btn-ghost sm" data-act="rangetoday">回到今天</button></div>` : ''}
+    ${r.gran === '自選' ? `<div class="range-custom"><input type="date" data-range="from" value="${esc(r.from)}"><span>至</span><input type="date" data-range="to" value="${esc(r.to)}">${err}</div>` : ''}
+    <span class="range-label">${svg(I.clock || I.check, 13)} ${esc(b.text)}${note ? `　·　${esc(note)}` : ''}</span>
+  </div>`;
+}
+/* 得分趨勢：依區間長度自動選日／週／月分桶，取每桶已評分場次平均分 */
+function trendSeries(rows) {
+  const done = rows.filter(r => r.status === 'done' && /^\d{4}\/\d{2}\/\d{2}/.test(String(r.date || ''))).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  if (!done.length) return [];
+  const b = rangeBounds(); const first = dParse(b.from || done[0].date), last = dParse(b.to || done[done.length - 1].date);
+  const span = Math.round((last - first) / 86400000);
+  const keyOf = d => { if (span <= 1) return null; if (span <= 31) return { k: dKey(d), l: `${d.getMonth() + 1}/${d.getDate()}` }; if (span <= 120) { const w = new Date(d); w.setDate(d.getDate() - (d.getDay() + 6) % 7); return { k: dKey(w), l: `${w.getMonth() + 1}/${w.getDate()} 週` }; } return { k: `${d.getFullYear()}/${pad2(d.getMonth() + 1)}`, l: `${d.getFullYear()}/${pad2(d.getMonth() + 1)}` }; };
+  if (span <= 1) return done.map(r => ({ l: String(r.date).slice(11, 16) || String(r.date).slice(5, 10), v: r.score }));
+  const buckets = new Map();
+  done.forEach(r => { const d = dParse(r.date); const kk = keyOf(d); const bk = buckets.get(kk.k) || { l: kk.l, sum: 0, n: 0 }; bk.sum += r.score; bk.n++; buckets.set(kk.k, bk); });
+  return [...buckets.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([, v]) => ({ l: v.l, v: Math.round(v.sum / v.n * 10) / 10 }));
+}
+function sessionMinutes(r) { if (r.durationSec) return r.durationSec / 60; const m = /(\d+)′(\d+)″/.exec(String(r.dur || '')); return m ? Number(m[1]) + Number(m[2]) / 60 : 0; }
+function minutesText(min) { return min >= 60 ? `${(min / 60).toFixed(1)}h` : `${Math.round(min)}m`; }
 
 /* ------------------------------------------------------------------ icons */
 const I = {
@@ -1207,7 +1265,8 @@ function iconFor(s) {
 function viewRecords(sc) {
   const full = ROLES[S.user.role].scope !== 'self';
   const q = S.recSearch.trim().toLowerCase();
-  const rows = sessionsFor(sc.id).filter(r =>
+  const inR = sessionsFor(sc.id).filter(inRange);
+  const rows = inR.filter(r =>
     !q || (r.pe + r.id + (memberById(r.member) || {}).name).toLowerCase().includes(q));
 
   const head = full
@@ -1239,14 +1298,17 @@ function viewRecords(sc) {
     </tr>`;
   }).join('');
 
-  const target = targetFor(sc.id); const prAll = passRate(rows); const prMine = passRate(rows.filter(r => r.member === S.user.id));
+  const target = targetFor(sc.id); const prAll = passRate(inR); const prMine = passRate(inR.filter(r => r.member === S.user.id));
+  const avgR = (() => { const d = inR.filter(r => r.status === 'done'); return d.length ? (d.reduce((x, y) => x + y.score, 0) / d.length).toFixed(1) : '—'; })();
   const prStrip = `<div class="pr-strip">
+      <div><span class="l">區間場次</span><b>${inR.length}</b><span class="s">已評分 ${inR.filter(r => r.status === 'done').length}・平均 ${avgR}</span></div>
       <div><span class="l">${full ? '可視範圍通過率' : '我的通過率'}</span><b style="color:${prCol(full ? prAll : prMine, target)}">${passRateText(full ? prAll : prMine)}</b><span class="s">${esc(passRateSub(full ? prAll : prMine, target))}</span></div>
       ${full && prMine.n ? `<div><span class="l">我的通過率</span><b style="color:${prCol(prMine, target)}">${passRateText(prMine)}</b><span class="s">${esc(passRateSub(prMine, target))}</span></div>` : ''}
       <div class="hint">通過率 = 通過次數 ÷ 全部對練次數；單場判定：${(() => { const ev = ensureEval(sc.id); return ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'; })()}${ensureEval(sc.id).veto ? '，法遵一票否決' : ''}。目標可在參數設定調整。</div>
     </div>`;
   return `<div class="wrap">
     <div class="page-h"><h1>對練記錄</h1><p>${esc(sc.desc)}</p></div>
+    ${viewRangeBar()}
     ${prStrip}
     <div class="filters">
       <button class="btn-primary" data-act="goto" data-arg="#/s/${sc.id}/new">${svg(I.play, 16)}發起對練</button>
@@ -1256,7 +1318,7 @@ function viewRecords(sc) {
     <div class="card">
       ${rows.length ? `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
                     : '<div class="empty">這個場景還沒有對練記錄。按「發起對練」開始第一場。</div>'}
-      <div class="tbl-foot">共 ${rows.length} 筆　·　${esc(scopeLabel(S.user))}</div>
+      <div class="tbl-foot">共 ${rows.length} 筆（${esc(rangeBounds().text)}）　·　${esc(scopeLabel(S.user))}</div>
     </div>
   </div>`;
 }
@@ -1496,11 +1558,10 @@ function viewReport(sc, sessionId) {
 
 /* ------------------------------------------------------------------ 場景：統計（主管模組） */
 function viewScenarioStats(sc) {
-  const rows = sessionsFor(sc.id);
+  const rows = sessionsFor(sc.id).filter(inRange);
   const done = rows.filter(r => r.status === 'done');
   const avg = done.length ? (done.reduce((a, b) => a + b.score, 0) / done.length) : 0;
-  const gran = ['日', '週', '月', '季', '年'].map(g =>
-    `<button class="${S.statGran === g ? 'on' : ''}" data-act="gran" data-arg="${g}">${g}</button>`).join('');
+  const rb = rangeBounds();
 
   const byPersona = {};
   rows.forEach(r => { byPersona[r.pe] = (byPersona[r.pe] || 0) + 1; });
@@ -1526,9 +1587,9 @@ function viewScenarioStats(sc) {
   return `<div class="wrap">
     <div class="page-h"><h1>對練統計 <span class="tag-mgr">主管模組</span></h1><p>${esc(sc.desc)}</p></div>
     <div class="scope-note">${esc(scopeLabel(S.user))}</div>
-    <div class="filters"><div class="seg">${gran}</div></div>
+    ${viewRangeBar()}
     <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
-      ${kpi('練', '對練場次', rows.length, '選定區間', '#D81E26')}
+      ${kpi('練', '對練場次', rows.length, rb.text, '#D81E26')}
       ${kpi('完', '已完成', done.length, `待評 ${rows.length - done.length}`, '#1E9E63')}
       ${kpi('分', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 份評分`, '#E0882E')}
       ${(() => { const pr = passRate(rows); const t = targetFor(sc.id); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, t), prCol(pr, t)); })()}
@@ -1538,7 +1599,7 @@ function viewScenarioStats(sc) {
       <div class="card"><div class="card-h"><h2>客戶畫像分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${personaBars || '<div class="empty">尚無資料</div>'}</div></div>
       <div class="card"><div class="card-h"><h2>理專分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${memberBars || '<div class="empty">尚無資料</div>'}</div></div>
     </div>
-    <div class="card"><div class="card-h"><h2>最近對練</h2><div class="sub">選定範圍內的對練場次</div></div>
+    <div class="card"><div class="card-h"><h2>最近對練</h2><div class="sub">${esc(rb.text)} 內的對練場次</div></div>
       ${rows.length ? `<table class="tbl" style="margin-top:12px"><thead><tr><th>對練編號</th><th>客戶畫像</th><th>理專</th><th>發起日期</th><th class="num">得分</th></tr></thead><tbody>${recent}</tbody></table>` : '<div class="empty">尚無資料</div>'}
     </div>
   </div>`;
@@ -1551,24 +1612,27 @@ function kpi(badge, label, value, sub, col) {
 
 /* ------------------------------------------------------------------ 我的數據 */
 function viewMe() {
-  const a = ANALYTICS;
-  const mine = SESSIONS.filter(s => s.member === S.user.id);
+  const allMine = SESSIONS.filter(s => s.member === S.user.id);
+  const mine = allMine.filter(inRange);
   const done = mine.filter(s => s.status === 'done');
   const avg = done.length ? (done.reduce((x, y) => x + y.score, 0) / done.length) : 0;
-  const prMine = passRate(mine);
+  const prMine = passRate(mine); const rb = rangeBounds();
+  const minutes = mine.reduce((n, r) => n + sessionMinutes(r), 0);
+  const trend = trendSeries(mine);
   const scPassRows = SCENARIOS.filter(s => mine.some(r => r.sc === s.id)).map(s => {
     const pr = passRate(mine.filter(r => r.sc === s.id)); const t = targetFor(s.id); const ev = ensureEval(s.id);
     return `<tr class="clickable" data-act="goto" data-arg="#/s/${s.id}/records"><td><b>${esc(s.cn)}</b></td><td style="font-size:12px;color:var(--body)">${ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'}${ev.veto ? '・法遵否決' : ''}</td><td class="num mono">${pr.n}</td><td class="num mono">${pr.k}</td><td class="num"><b class="mono" style="color:${prCol(pr, t)}">${passRateText(pr)}</b></td><td class="num mono">${t}%</td><td>${pr.pct == null ? '—' : pr.pct >= t ? '<span class="pill good">已達標</span>' : `<span class="pill bad">差 ${t - pr.pct}%</span>`}</td></tr>`;
   }).join('');
 
-  const W = 620, H = 200, padX = 22, padTop = 16, padBot = 30, n = a.trend.length;
-  const xs = i => padX + i * ((W - 2 * padX) / (n - 1));
-  const ys = v => padTop + (1 - (v - 65) / 30) * (H - padTop - padBot);
-  const pts = a.trend.map((t, i) => [xs(i), ys(t.v)]);
+  const W = 620, H = 200, padX = 22, padTop = 16, padBot = 30, n = trend.length;
+  const xs = i => n === 1 ? W / 2 : padX + i * ((W - 2 * padX) / (n - 1));
+  const ys = v => padTop + (1 - (Math.max(50, Math.min(100, v)) - 50) / 50) * (H - padTop - padBot);
+  const pts = trend.map((t, i) => [xs(i), ys(t.v)]);
   const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-  const area = `M${pts[0][0].toFixed(1)},${H - padBot} ` + pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') + ` L${pts[n - 1][0].toFixed(1)},${H - padBot} Z`;
-  const dots = a.trend.map((t, i) => `<circle cx="${xs(i).toFixed(1)}" cy="${ys(t.v).toFixed(1)}" r="3.6" fill="#fff" stroke="#D81E26" stroke-width="2"/>
-    <text x="${xs(i).toFixed(1)}" y="${H - padBot + 16}" fill="#7C8992" font-size="10" text-anchor="middle">${esc(t.l)}</text>`).join('');
+  const area = n > 1 ? `M${pts[0][0].toFixed(1)},${H - padBot} ` + pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') + ` L${pts[n - 1][0].toFixed(1)},${H - padBot} Z` : '';
+  const dots = trend.map((t, i) => `<circle cx="${xs(i).toFixed(1)}" cy="${ys(t.v).toFixed(1)}" r="3.6" fill="#fff" stroke="#D81E26" stroke-width="2"/>
+    <text x="${xs(i).toFixed(1)}" y="${ys(t.v) - 9}" fill="#D81E26" font-size="10" font-weight="700" text-anchor="middle">${t.v}</text>
+    ${n <= 12 || i % Math.ceil(n / 12) === 0 ? `<text x="${xs(i).toFixed(1)}" y="${H - padBot + 16}" fill="#7C8992" font-size="10" text-anchor="middle">${esc(t.l)}</text>` : ''}`).join('');
 
   const cx = 160, cy = 115, R = 82, dn = OVERALL_DIMS.length;
   const ang = i => (-90 + i * (360 / dn)) * Math.PI / 180;
@@ -1580,9 +1644,10 @@ function viewMe() {
       <text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" fill="#56646D" font-size="11" text-anchor="${lx < cx - 4 ? 'end' : lx > cx + 4 ? 'start' : 'middle'}">${esc(d.cn)}</text>`;
   }).join('');
 
-  const distMax = Math.max(...a.dist.map(d => d.n));
-  const dist = a.dist.map(d => `<div class="bar-row"><div class="lb"><span>${esc(d.cn)}</span><span>${d.n} 次</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:${(d.n / distMax * 100).toFixed(0)}%;background:linear-gradient(90deg,${d.col}99,${d.col})"></div></div></div>`).join('');
+  const distList = SCENARIOS.map(s => ({ cn: s.cn, n: mine.filter(r => r.sc === s.id).length, col: s.c2 || '#2D6CC0' })).filter(d => d.n);
+  const distMax = Math.max(1, ...distList.map(d => d.n));
+  const dist = distList.map(d => `<div class="bar-row"><div class="lb"><span>${esc(d.cn)}</span><span>${d.n} 次</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${(d.n / distMax * 100).toFixed(0)}%;background:linear-gradient(90deg,${d.col}99,${d.col})"></div></div></div>`).join('') || '<div class="empty">此區間沒有對練</div>';
 
   const recent = mine.slice(0, 6).map(r => {
     const sc = scenarioById(r.sc) || {};
@@ -1593,17 +1658,18 @@ function viewMe() {
 
   return `<div class="wrap">
     <div class="page-h"><h1>我的數據</h1><p>${esc(S.user.name)}　·　${esc(UNITS[S.user.unit])}　·　只顯示你自己的對練成績。</p></div>
+    ${viewRangeBar(`累計 ${allMine.length} 場`)}
     <div class="kpis">
-      ${kpi('練', '累計對練', mine.length, `本月 +${Math.min(mine.length, 3)}`, '#D81E26')}
+      ${kpi('練', '對練場次', mine.length, rb.text, '#D81E26')}
       ${kpi('分', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#E0882E')}
-      ${kpi('時', '練習時長', a.kpis[2].val, a.kpis[2].sub, '#009E96')}
+      ${kpi('時', '練習時長', minutes ? minutesText(minutes) : '—', mine.length ? `平均每場 ${minutesText(minutes / mine.length)}` : '此區間沒有對練', '#009E96')}
       ${kpi('過', '通過率', passRateText(prMine), passRateSub(prMine, TARGETS.passRate), prCol(prMine, TARGETS.passRate))}
     </div>
-    <div class="card" style="margin-bottom:18px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">通過次數 ÷ 全部對練次數・目標依場景設定</div></div>
+    <div class="card" style="margin-bottom:18px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">${esc(rb.text)}・通過次數 ÷ 全部對練次數・目標依場景設定</div></div>
       <table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>單場通關判定</th><th class="num">對練次數</th><th class="num">通過</th><th class="num">通過率</th><th class="num">目標</th><th>狀態</th></tr></thead><tbody>${scPassRows || '<tr><td colspan="7" class="empty">尚無對練記錄</td></tr>'}</tbody></table></div>
     <div class="grid-me" style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:18px;align-items:start">
-      <div class="card"><div class="card-h"><h2>得分趨勢</h2><div class="sub">SCORE TREND</div></div>
-        <div class="card-b"><svg viewBox="0 0 620 200" style="width:100%;height:auto">
+      <div class="card"><div class="card-h"><h2>得分趨勢</h2><div class="sub">${esc(rb.text)}・${n > 1 ? '各期平均分' : '單場分數'}</div></div>
+        <div class="card-b">${n ? '' : '<div class="empty">此區間沒有已評分的對練</div>'}<svg viewBox="0 0 620 200" style="width:100%;height:auto;${n ? '' : 'display:none'}">
           <defs><linearGradient id="tf" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#D81E26" stop-opacity=".22"/><stop offset="100%" stop-color="#D81E26" stop-opacity="0"/></linearGradient></defs>
           <line x1="22" y1="44" x2="598" y2="44" stroke="#EDF1F2"/><line x1="22" y1="92" x2="598" y2="92" stroke="#EDF1F2"/><line x1="22" y1="140" x2="598" y2="140" stroke="#EDF1F2"/>
@@ -1617,19 +1683,20 @@ function viewMe() {
         </svg></div></div>
     </div>
     <div class="grid2" style="align-items:start">
-      <div class="card"><div class="card-h"><h2>場景練習分布</h2><div class="sub">SCENARIO DISTRIBUTION</div></div><div class="card-b">${dist}</div></div>
-      <div class="card"><div class="card-h"><h2>我的最近對練</h2><div class="sub">RECENT SESSIONS</div></div>
+      <div class="card"><div class="card-h"><h2>場景練習分布</h2><div class="sub">${esc(rb.text)}</div></div><div class="card-b">${dist}</div></div>
+      <div class="card"><div class="card-h"><h2>我的最近對練</h2><div class="sub">${esc(rb.text)}</div></div>
         ${mine.length ? `<table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>客戶畫像</th><th>日期</th><th class="num">得分</th></tr></thead><tbody>${recent}</tbody></table>`
-                      : '<div class="empty">你還沒有對練記錄。</div>'}</div>
+                      : `<div class="empty">${allMine.length ? '此區間沒有對練記錄，試試切換區間。' : '你還沒有對練記錄。'}</div>`}</div>
     </div>
   </div>`;
 }
 
 /* ------------------------------------------------------------------ 洞察分析（主管模組） */
 function viewInsights() {
-  const rows = visibleSessions();
+  const rows = visibleSessions().filter(inRange);
   const done = rows.filter(r => r.status === 'done');
   const avg = done.length ? done.reduce((a, b) => a + b.score, 0) / done.length : 0;
+  const rb = rangeBounds();
   const ids = visibleMemberIds(S.user);
   const people = MEMBERS.filter(m => ids.includes(m.id));
 
@@ -1674,10 +1741,11 @@ function viewInsights() {
   return `<div class="wrap">
     <div class="page-h"><h1>洞察分析 <span class="tag-mgr">主管模組</span></h1><p>跨場景的團隊表現：依組織層級彙總。</p></div>
     <div class="scope-note">${esc(scopeLabel(S.user))}</div>
+    ${viewRangeBar()}
     <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
       ${kpi('均', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#D81E26')}
       ${(() => { const pr = passRate(rows); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, TARGETS.passRate), prCol(pr, TARGETS.passRate)); })()}
-      ${kpi('場', '對練場次', rows.length, `${rows.length - done.length} 場待評`, '#2D6CC0')}
+      ${kpi('場', '對練場次', rows.length, `${esc(rb.text)}・${rows.length - done.length} 場待評`, '#2D6CC0')}
       ${kpi('人', '覆蓋人數', new Set(rows.map(r => r.member)).size, `可視成員 ${people.length} 人`, '#009E96')}
       ${kpi('景', '涵蓋場景', new Set(rows.map(r => r.sc)).size, `共 ${SCENARIOS.length} 個場景`, '#6A5BC4')}
     </div>
@@ -2108,10 +2176,10 @@ const ACTIONS = {
   pickdiff: k => { S.difficulty = k; render(); },
   startcall: () => startCall(),
   navtoggle: () => { S.navOpen = !S.navOpen; render(); }, navclose: () => { S.navOpen = false; render(); },
+  rangegran: g => { setRangeGran(g); render(); }, rangeprev: () => { rangeShift(-1); render(); }, rangenext: () => { rangeShift(1); render(); }, rangetoday: () => { S.range.anchor = dKey(new Date()); render(); },
   askend: () => { S.confirmEnd = true; render(); },
   cancelend: () => { S.confirmEnd = false; render(); },
   doend: () => endCall(),
-  gran: g => { S.statGran = g; render(); },
   settab: t => { S.settingsTab = t; render(); },
   memtab: t => { S.memberTab = t; render(); },
   agentapiopen: () => openAgentApi(), agentapisync: () => agentApiSync(),
@@ -2216,6 +2284,8 @@ document.addEventListener('input', e => {
 });
 
 document.addEventListener('change', e => {
+  const rg = e.target.closest('[data-range]');
+  if (rg) { S.range[rg.dataset.range] = rg.value; render(); return; }
   const af = e.target.closest('[data-audit]');
   if (af) { S.auditFilter[af.dataset.audit] = af.value; render(); return; }
   const rp = e.target.closest('[data-roleperm]');
