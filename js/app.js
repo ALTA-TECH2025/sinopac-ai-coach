@@ -1,6 +1,6 @@
 // 永豐 AI 對練 v1.0.4
 // 外框與權限模型沿用 CMC 金牌教練：場景中心 → 工作場景（對練記錄／對練／統計）→ 系統設定。
-// 對練畫面與五維評分複盤報告沿用永豐 v1.0.3 原型。
+// 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
 import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js';
@@ -16,16 +16,19 @@ const S = {
   route: { name: 'hub' },
   collapsed: false,
   hubCat: 'all', hubSearch: '',
-  personaId: null, difficulty: 'medium',
+  personaId: null, difficulty: 'L2',
   reveal: 0, elapsed: 0, confirmEnd: false, timer: null,
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
   liveSession: null,
 };
 
+// 難度集合依應用設定：信貸電銷 L1／L2／L3，客服話務 一般／客訴；每個場景以 diffs 指定可用集合
 const DIFF = {
-  easy:   { cn: '簡單', en: 'Cooperative', col: '#009E96', desc: '客戶態度配合，適合熟悉流程、建立信心。' },
-  medium: { cn: '標準', en: 'Hesitant',    col: '#E0882E', desc: '客戶帶有疑慮或情緒，需要引導與同理。' },
-  hard:   { cn: '進階', en: 'Demanding',   col: '#D81E26', desc: '客戶抵觸、情緒強烈或資訊充分，全面考驗應變。' },
+  L1:        { cn: 'L1 配合型', en: 'Cooperative',        col: '#009E96', desc: '客戶態度配合，適合熟悉複訪／議價流程、建立信心。' },
+  L2:        { cn: 'L2 標準異議', en: 'Standard Objection', col: '#E0882E', desc: '常見異議、拖延與比價，需要引導與同理。' },
+  L3:        { cn: 'L3 高難度', en: 'Demanding',          col: '#D81E26', desc: '情緒化、疑似詐騙質疑、條件強勢談判，全面考驗應變。' },
+  normal:    { cn: '一般對話版', en: 'Standard',           col: '#009E96', desc: '一般諮詢，問題單一，回應後接受。' },
+  complaint: { cn: '客訴版',    en: 'Complaint',          col: '#D81E26', desc: '一次問很多問題、回應後不滿或衍生其他問題、提及申訴主管機關。' },
 };
 
 const scenarioById = id => SCENARIOS.find(s => s.id === id);
@@ -80,8 +83,8 @@ function sessionsFor(scenarioId) {
   return visibleSessions().filter(s => s.sc === scenarioId);
 }
 
-function transcriptFor(scId) { return TRANSCRIPTS[scId] || TRANSCRIPTS.wealth; }
-function reportFor(scId) { return REPORT_CONTENT[scId] || REPORT_CONTENT.wealth; }
+function transcriptFor(scId) { return TRANSCRIPTS[scId] || TRANSCRIPTS['credit-revisit']; }
+function reportFor(scId) { return REPORT_CONTENT[scId] || REPORT_CONTENT['credit-revisit']; }
 
 function replayLines(scId) {
   return transcriptFor(scId).map((l, i) => ({ at: AT[i] != null ? AT[i] : i * 30, who: l.who, text: l.t }));
@@ -332,7 +335,7 @@ function viewNew(sc) {
     </button>`;
   }).join('');
 
-  const diffs = ['easy', 'medium', 'hard'].map(k => {
+  const diffs = (sc.diffs || Object.keys(DIFF)).map(k => {
     const d = DIFF[k], on = S.difficulty === k;
     return `<button class="diff-card" data-act="pickdiff" data-arg="${k}"
       style="${on ? `background:${d.col}12;border-color:${d.col}` : ''}">
