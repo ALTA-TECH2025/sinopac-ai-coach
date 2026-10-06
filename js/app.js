@@ -240,70 +240,168 @@ function saveScenarioOverride(id, scenarioPatch, metaPatch) {
   saved[id] = { scenario: { ...prev.scenario, ...scenarioPatch }, meta: { ...prev.meta, ...metaPatch } };
   try { localStorage.setItem(OVERRIDE_KEY, JSON.stringify(saved)); } catch (e) { /* 私密視窗等情況忽略 */ }
 }
-function openEditScenario(id) {
+/* 每個場景底下依「客戶畫像 × 難度」配置多組對練 Agent；舊資料（單一 agent/embed）自動轉成每個畫像一組 */
+const LS_CUSTOM_SCN = 'sinopac-coach.customScenarios';
+const SCN_ICON = { credit: 'card', service: 'chat' };
+const SCN_TINT = { credit: { tint: '#E4ECF7', c1: '#5C95D6', c2: '#2D6CC0' }, service: { tint: '#FFF4E8', c1: '#F0A34A', c2: '#E0882E' } };
+function iconSvgFor(cat) { const base = SCENARIOS.find(s => s.cat === cat) || SCENARIOS[0]; return base ? base.icon : ''; }
+function ensureAgents(id) {
+  const sc = scenarioById(id); const meta = SCENARIO_META[id]; if (!sc || !meta) return [];
+  if (!Array.isArray(meta.agents)) {
+    // 示範資料：每個客戶畫像依其預設難度各配一組 Agent，iframe 以 altabots 擴展應用的嵌入網址示意
+    meta.agents = sc.personas.map((p, i) => ({ id: 'ag-' + id + '-' + i, personaId: p.id, diff: p.diff,
+      name: `${meta.agent || 'altabots · 對練 Agent'} · ${DIFF[p.diff] ? DIFF[p.diff].cn : p.diff}`,
+      embed: (i === 0 && meta.embed) ? meta.embed : `<iframe src="https://agent.sinopac.ai/altabots/app/${id}/${p.id}-${p.diff}/embed" allow="microphone; autoplay"></iframe>`,
+      status: meta.status === 'on' ? 'on' : 'off' }));
+  }
+  return meta.agents;
+}
+function agentFor(scId, personaId, diff) {
+  const list = ensureAgents(scId);
+  return list.find(x => x.personaId === personaId && x.diff === diff) || null;
+}
+function loadCustomScenarios() {
+  const saved = lsGet(LS_CUSTOM_SCN); if (!Array.isArray(saved)) return;
+  saved.forEach(({ scenario, meta }) => { if (scenario && meta && !SCENARIOS.some(s => s.id === scenario.id)) { scenario.icon = iconSvgFor(scenario.cat); SCENARIOS.push(scenario); SCENARIO_META[scenario.id] = meta; } });
+}
+function persistCustomScenarios() {
+  const list = SCENARIOS.filter(s => s.custom).map(s => ({ scenario: { ...s, icon: undefined }, meta: SCENARIO_META[s.id] }));
+  lsSet(LS_CUSTOM_SCN, list);
+}
+function personaInit(name) { const t = String(name || '').split('·').pop().trim(); return t ? t[0] : '客'; }
+
+function openEditScenario(id, addAgent) {
+  if (!id) {
+    S.editScenario = { id: null, draft: {
+      cn: '', en: '', desc: '', cat: 'credit', youRoleCn: '電銷專員', duration: '3–8′', diffs: DIFF_SETS.credit.join(','),
+      ver: 'v1.0', owner: S.user ? S.user.name : '', status: 'off', personas: [], agents: [],
+    } };
+    render(); return;
+  }
   const sc = scenarioById(id); const meta = SCENARIO_META[id];
   if (!sc || !meta) return;
   S.editScenario = { id, draft: {
     cn: sc.cn, en: sc.en, desc: sc.desc, cat: sc.cat, youRoleCn: sc.youRole.cn, duration: sc.duration,
     diffs: (sc.diffs || DIFF_SETS[sc.cat] || []).join(','),
-    ver: meta.ver, owner: meta.owner, status: meta.status, agent: meta.agent, embed: meta.embed || '',
+    ver: meta.ver, owner: meta.owner, status: meta.status,
+    personas: sc.personas.map(p => ({ ...p })),
+    agents: ensureAgents(id).map(x => ({ ...x })),
   } };
+  if (addAgent) agentAdd(false);
   render();
 }
 function embedSrc(code) { const m = /src\s*=\s*["']([^"']+)["']/i.exec(code || ''); return m ? m[1] : ''; }
 function saveEditScenario() {
   const e = S.editScenario; if (!e) return;
-  const d = e.draft; const sc = scenarioById(e.id); const meta = SCENARIO_META[e.id];
-  const errors = [];
+  const d = e.draft; const errors = [];
   if (!d.cn.trim()) errors.push('場景名稱必填');
-  if (d.embed.trim() && !/^https:\/\//i.test(embedSrc(d.embed))) errors.push('iframe 嵌入代碼須含 https:// 開頭的 src');
+  if (!d.personas.length) errors.push('至少要有一個客戶畫像');
+  d.personas.forEach((p, i) => { if (!String(p.name || '').trim()) errors.push(`第 ${i + 1} 個客戶畫像缺名稱`); });
+  const seen = new Set();
+  d.agents.forEach((g, i) => {
+    const key = g.personaId + '|' + g.diff;
+    if (seen.has(key)) errors.push(`第 ${i + 1} 組 Agent 的客戶畫像與難度重複`); seen.add(key);
+    if (!d.personas.some(p => p.id === g.personaId)) errors.push(`第 ${i + 1} 組 Agent 指到的客戶畫像已不存在`);
+    if (g.embed.trim() && !/^https:\/\//i.test(embedSrc(g.embed))) errors.push(`第 ${i + 1} 組 Agent 的 iframe 須含 https:// 開頭的 src`);
+    if (g.status === 'on' && !g.embed.trim()) errors.push(`第 ${i + 1} 組 Agent 已啟用但尚未貼入 iframe`);
+  });
   if (errors.length) { e.error = errors.join('；'); render(); return; }
   const diffs = d.diffs.split(',').map(x => x.trim()).filter(k => DIFF[k]);
-  const scenarioPatch = { cn: d.cn.trim(), en: d.en.trim(), desc: d.desc.trim(), cat: d.cat, catCn: CAT_LABEL[d.cat] || sc.catCn,
-    duration: d.duration.trim(), diffs: diffs.length ? diffs : (DIFF_SETS[d.cat] || sc.diffs), youRoleCn: d.youRoleCn.trim() };
-  const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agent: d.agent.trim(), embed: d.embed.trim() };
+  const personas = d.personas.map((p, i) => ({ id: p.id, name: p.name.trim(), en: p.en || '', init: personaInit(p.name), col: p.col || PALETTE[i % PALETTE.length], risk: (p.risk || '').trim(), mood: (p.mood || '').trim(), temper: (p.temper || '').trim(), diff: DIFF[p.diff] ? p.diff : (diffs[0] || 'L2') }));
+  const agents = d.agents.map(g => ({ ...g, name: g.name.trim(), embed: g.embed.trim() }));
+  const first = agents.find(g => g.status === 'on') || agents[0];
+  const scenarioPatch = { cn: d.cn.trim(), en: d.en.trim(), desc: d.desc.trim(), cat: d.cat, catCn: CAT_LABEL[d.cat] || '', duration: d.duration.trim(),
+    diffs: diffs.length ? diffs : (DIFF_SETS[d.cat] || ['L2']), youRoleCn: d.youRoleCn.trim(), personas };
+  const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agents, agent: first ? first.name : '', embed: first ? first.embed : '' };
+  let sc, meta, isNew = false;
+  if (e.id) { sc = scenarioById(e.id); meta = SCENARIO_META[e.id]; }
+  else {
+    isNew = true; const id = 'sc-' + Date.now().toString(36);
+    sc = { id, custom: true, icon: iconSvgFor(d.cat), ...SCN_TINT[d.cat], tag: '', tagKind: '', sessions: '真實場景', youRole: { cn: '', en: '' } };
+    meta = {}; SCENARIOS.push(sc); SCENARIO_META[id] = meta;
+  }
   Object.assign(sc, scenarioPatch); sc.youRole = { ...sc.youRole, cn: scenarioPatch.youRoleCn };
   Object.assign(meta, metaPatch);
-  saveScenarioOverride(e.id, scenarioPatch, metaPatch);
-  audit('編輯場景', `${sc.cn} ${meta.ver}・${meta.status === 'on' ? '已啟用' : '未啟用'}${metaPatch.embed ? '・已設定 iframe' : ''}`, '場景設定');
+  if (sc.custom) persistCustomScenarios(); else saveScenarioOverride(sc.id, scenarioPatch, metaPatch);
+  audit(isNew ? '新增場景' : '編輯場景', `${sc.cn} ${meta.ver}・${meta.status === 'on' ? '已啟用' : '未啟用'}・客戶畫像 ${personas.length} 個・Agent ${agents.length} 組（${agents.filter(g => g.status === 'on').length} 組啟用）`, '場景設定');
   S.editScenario = null;
-  if (S.route.name === 'scenario' && S.route.sc === e.id && meta.status !== 'on') { go('#/hub'); return; }
+  if (S.route.name === 'scenario' && S.route.sc === sc.id && meta.status !== 'on') { go('#/hub'); return; }
   render();
 }
+function personaAdd() {
+  const e = S.editScenario; if (!e) return; const d = e.draft; const diffs = d.diffs.split(',').filter(Boolean);
+  d.personas.push({ id: 'p-' + Date.now().toString(36), name: '', risk: '', mood: '', temper: '', diff: diffs[0] || 'L2', col: PALETTE[d.personas.length % PALETTE.length] });
+  render();
+}
+function personaDel(idx) { const e = S.editScenario; if (!e) return; const p = e.draft.personas[Number(idx)]; e.draft.personas.splice(Number(idx), 1); e.draft.agents = e.draft.agents.filter(g => !p || g.personaId !== p.id); render(); }
+function agentAdd(doRender = true) {
+  const e = S.editScenario; if (!e) return; const d = e.draft;
+  if (!d.personas.length) { e.error = '請先新增客戶畫像，再配置 Agent'; render(); return; }
+  const diffs = d.diffs.split(',').filter(Boolean); const used = new Set(d.agents.map(g => g.personaId + '|' + g.diff));
+  let pick = null;
+  for (const p of d.personas) { for (const df of (diffs.length ? diffs : [p.diff])) { if (!used.has(p.id + '|' + df)) { pick = { personaId: p.id, diff: df }; break; } } if (pick) break; }
+  if (!pick) pick = { personaId: d.personas[0].id, diff: diffs[0] || d.personas[0].diff };
+  d.agents.push({ id: 'ag-' + Date.now().toString(36), personaId: pick.personaId, diff: pick.diff, name: '', embed: '', status: 'off' });
+  if (doRender) render();
+}
+function agentDel(idx) { const e = S.editScenario; if (!e) return; e.draft.agents.splice(Number(idx), 1); render(); }
 
 function viewEditScenarioModal() {
   const e = S.editScenario; if (!e) return '';
-  const d = e.draft; const sc = scenarioById(e.id);
+  const d = e.draft; const isNew = !e.id;
   const opt = (v, cur, label) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
-  const diffChoices = Object.keys(DIFF).map(k => {
-    const on = d.diffs.split(',').includes(k);
-    return `<label class="chk"><input type="checkbox" data-field="diffs" value="${k}" ${on ? 'checked' : ''}><span class="pill" style="color:${DIFF[k].col};background:${DIFF[k].col}1f">${DIFF[k].cn}</span></label>`;
+  const diffList = d.diffs.split(',').filter(Boolean);
+  const diffOpts = diffList.length ? diffList : Object.keys(DIFF);
+  const diffChoices = Object.keys(DIFF).map(k => `<label class="chk"><input type="checkbox" data-field="diffs" value="${k}" ${diffList.includes(k) ? 'checked' : ''}><span class="pill" style="color:${DIFF[k].col};background:${DIFF[k].col}1f">${DIFF[k].cn}</span></label>`).join('');
+  const personaRows = d.personas.map((p, i) => `<div class="agent-row">
+      <div class="agent-row-hd"><span class="av" style="background:${p.col || PALETTE[i % PALETTE.length]}">${esc(personaInit(p.name))}</span><b>客戶畫像 ${i + 1}</b>
+        <button class="btn-ghost sm danger" data-act="personadel" data-arg="${i}" style="margin-left:auto">移除</button></div>
+      <div class="form-grid agent-grid">
+        <label class="field full-2"><span>名稱 <b>*</b></span><input data-field="personas.${i}.name" value="${esc(p.name || '')}" placeholder="例：複訪 A1 · 上班族拖延 李先生"></label>
+        <label class="field"><span>預設難度</span><select data-field="personas.${i}.diff">${diffOpts.map(k => opt(k, p.diff, DIFF[k].cn)).join('')}</select></label>
+        <label class="field"><span>屬性標籤</span><input data-field="personas.${i}.risk" value="${esc(p.risk || '')}" placeholder="受薪階級 · 年收入 80 萬"></label>
+        <label class="field full-2"><span>情緒狀態</span><input data-field="personas.${i}.mood" value="${esc(p.mood || '')}" placeholder="客氣、反覆拖延"></label>
+        <label class="field full"><span>背景與能力缺口</span><textarea data-field="personas.${i}.temper" rows="2">${esc(p.temper || '')}</textarea></label>
+      </div></div>`).join('');
+  const agentRows = d.agents.map((g, i) => {
+    const src = embedSrc(g.embed); const p = d.personas.find(x => x.id === g.personaId);
+    return `<div class="agent-row">
+      <div class="agent-row-hd"><b>Agent ${i + 1}</b>${p ? `<span class="pill" style="color:${p.col};background:${p.col}1f">${esc(p.name || '未命名畫像')}</span>` : '<span class="pill bad">畫像已移除</span>'}${DIFF[g.diff] ? `<span class="pill" style="color:${DIFF[g.diff].col};background:${DIFF[g.diff].col}1f">${DIFF[g.diff].cn}</span>` : ''}
+        <button class="btn-ghost sm danger" data-act="agentdel" data-arg="${i}" style="margin-left:auto">移除</button></div>
+      <div class="form-grid agent-grid">
+        <label class="field"><span>客戶畫像</span><select data-field="agents.${i}.personaId">${d.personas.map(x => opt(x.id, g.personaId, x.name || '未命名畫像')).join('')}</select></label>
+        <label class="field"><span>難度</span><select data-field="agents.${i}.diff">${diffOpts.map(k => opt(k, g.diff, DIFF[k].cn)).join('')}</select></label>
+        <label class="field"><span>狀態</span><select data-field="agents.${i}.status">${opt('on', g.status, '已啟用')}${opt('off', g.status, '未啟用')}</select></label>
+        <label class="field full"><span>Agent 名稱</span><input data-field="agents.${i}.name" value="${esc(g.name)}" placeholder="例：altabots · 信貸電銷對練 Agent · 複訪 A1 · L2"></label>
+        <label class="field full"><span>iframe 嵌入代碼 <b>${g.status === 'on' ? '*' : ''}</b></span>
+          <textarea data-field="agents.${i}.embed" rows="2" class="mono" placeholder='<iframe src="https://agent.sinopac.ai/altabots/app/.../embed" allow="microphone; autoplay"></iframe>'>${esc(g.embed)}</textarea>
+          <small>${src ? `解析到 src：${esc(src)}` : '貼入 altabots 開發空間提供的嵌入代碼；系統只保留 src。'}</small></label>
+      </div></div>`;
   }).join('');
-  const src = embedSrc(d.embed);
   return `<div class="modal-bg" data-act="cancelscn">
-    <div class="modal form" data-act="noop">
-      <div class="form-hd"><div><h3>編輯場景</h3><p>${esc(sc.id)}　·　儲存後立即生效，並保存在此瀏覽器</p></div>
+    <div class="modal form wide" data-act="noop">
+      <div class="form-hd"><div><h3>${isNew ? '新增場景' : '編輯場景'}</h3><p>${isNew ? '建立新的工作場景、客戶畫像與對練 Agent' : esc(e.id)}　·　儲存後立即生效，並保存在此瀏覽器</p></div>
         <button class="x" data-act="cancelscn" aria-label="關閉">${svg(I.back, 16)}</button></div>
       ${e.error ? `<div class="form-err">${esc(e.error)}</div>` : ''}
       <div class="form-grid">
-        <label class="field"><span>場景名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}"></label>
+        <label class="field"><span>場景名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}" placeholder="例：複訪"></label>
         <label class="field"><span>英文名稱</span><input data-field="en" value="${esc(d.en)}"></label>
-        <label class="field full"><span>說明</span><textarea data-field="desc" rows="2">${esc(d.desc)}</textarea></label>
         <label class="field"><span>場景類型</span><select data-field="cat">${opt('credit', d.cat, '信貸電銷')}${opt('service', d.cat, '客服話務')}</select></label>
+        <label class="field full"><span>說明</span><textarea data-field="desc" rows="2">${esc(d.desc)}</textarea></label>
         <label class="field"><span>你的角色</span><input data-field="youRoleCn" value="${esc(d.youRoleCn)}"></label>
         <label class="field"><span>預計時長</span><input data-field="duration" value="${esc(d.duration)}" placeholder="3–8′"></label>
         <label class="field"><span>狀態</span><select data-field="status">${opt('on', d.status, '已啟用')}${opt('off', d.status, '未啟用')}</select></label>
         <label class="field"><span>版本</span><input data-field="ver" value="${esc(d.ver)}"></label>
-        <label class="field"><span>維護人</span><input data-field="owner" value="${esc(d.owner)}"></label>
+        <label class="field full-2"><span>維護人</span><input data-field="owner" value="${esc(d.owner)}"></label>
         <div class="field full"><span>難度集合</span><div class="chks">${diffChoices}</div></div>
-        <label class="field full"><span>對練 Agent 名稱</span><input data-field="agent" value="${esc(d.agent)}"></label>
-        <label class="field full"><span>Agent iframe 嵌入代碼</span>
-          <textarea data-field="embed" rows="3" class="mono" placeholder='<iframe src="https://agent.sinopac.ai/altabots/app/.../embed" allow="microphone; autoplay"></iframe>'>${esc(d.embed)}</textarea>
-          <small>${src ? `解析到 src：${esc(src)}` : '貼入 altabots 開發空間提供的嵌入代碼；系統只保留 src，尺寸由對練中畫面決定。'}</small></label>
-        <div class="field full"><span>客戶畫像</span><div class="chks">${sc.personas.map(p => `<span class="pill" style="color:${p.col};background:${p.col}1f">${esc(p.name)}・${DIFF[p.diff] ? DIFF[p.diff].cn : p.diff}</span>`).join('')}</div>
-          <small>客戶畫像的新增與編輯在 altabots 開發空間維護，此處唯讀。</small></div>
       </div>
-      <div class="form-ft"><button class="btn-ghost" data-act="cancelscn">取消</button><button class="btn-primary" data-act="savescn">儲存</button></div>
+      <div class="agents-hd"><div><b>客戶畫像</b><small>AI 扮演的客戶；每個畫像有預設難度，學員可再調整。</small></div>
+        <button class="btn-ghost sm" data-act="personaadd">＋ 新增客戶畫像</button></div>
+      ${personaRows || '<div class="card empty" style="padding:16px">尚未建立客戶畫像。</div>'}
+      <div class="agents-hd"><div><b>對練 Agent 配置</b><small>每組 Agent 對應一個「客戶畫像 × 難度」；學員選定後，對練中畫面載入對應的 iframe。</small></div>
+        <button class="btn-ghost sm" data-act="agentadd">＋ 新增 Agent</button></div>
+      ${agentRows || '<div class="card empty" style="padding:16px">尚未配置 Agent，按「新增 Agent」。</div>'}
+      <div class="form-ft"><button class="btn-ghost" data-act="cancelscn">取消</button><button class="btn-primary" data-act="savescn">${isNew ? '建立場景' : '儲存'}</button></div>
     </div></div>`;
 }
 
@@ -667,7 +765,10 @@ function viewNew(sc) {
 
   const sd = DIFF[S.difficulty];
   return `<div class="wrap">
-    <div class="page-h"><h1>發起對練</h1><p>你的角色：<b>${esc(sc.youRole.cn)}</b>　·　預計時長 ${esc(sc.duration)}　·　${esc(SCENARIO_META[sc.id].agent)}</p></div>
+    <div class="page-h"><h1>發起對練</h1><p>你的角色：<b>${esc(sc.youRole.cn)}</b>　·　預計時長 ${esc(sc.duration)}</p></div>
+    ${(() => { const g = agentFor(sc.id, sel.id, S.difficulty); return g && g.status === 'on' && g.embed
+      ? `<div class="agent-note ok">${svg(I.check, 14)} 對練 Agent：<b>${esc(g.name || '未命名')}</b>　<span class="mono">${esc(embedSrc(g.embed))}</span></div>`
+      : `<div class="agent-note warn">${svg(I.warn, 14)} 此客戶畫像 × 難度尚未配置啟用中的對練 Agent，將以示範對話進行；請管理員至系統設定 → 場景設定配置。</div>`; })()}
     <h2 style="font-family:'Noto Sans TC';font-size:16px;font-weight:700;margin-bottom:14px">選擇客戶畫像</h2>
     <div class="grid3" style="margin-bottom:28px">${personas}</div>
     <h2 style="font-family:'Noto Sans TC';font-size:16px;font-weight:700;margin-bottom:6px">調整對練難度</h2>
@@ -1047,6 +1148,9 @@ function viewSysScenarios() {
   const tabs = [['list', '場景清單'], ['agent', 'Agent 配置']].map(([k, l]) =>
     `<button class="${S.settingsTab === k ? 'on' : ''}" data-act="settab" data-arg="${k}">${l}</button>`).join('');
 
+  const toolbar = S.settingsTab === 'list'
+    ? `<div class="filters" style="margin-bottom:14px"><div style="margin-left:auto"><button class="btn-primary" data-act="scnnew">＋ 新增場景</button></div></div>`
+    : `<div class="filters" style="margin-bottom:14px"><div style="margin-left:auto;display:flex;gap:8px;align-items:center"><select id="agent-scn" class="sel-sm">${SCENARIOS.map(s => `<option value="${s.id}">${esc(s.cn)}</option>`).join('')}</select><button class="btn-primary" data-act="agentnew">＋ 新增 Agent</button></div></div>`;
   const body = S.settingsTab === 'list'
     ? SCENARIOS.map(s => {
         const meta = SCENARIO_META[s.id];
@@ -1058,25 +1162,28 @@ function viewSysScenarios() {
               <span class="pill" style="color:${meta.status === 'on' ? '#1E9E63' : '#7C8992'};background:${meta.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${meta.status === 'on' ? '已啟用' : '未啟用'}</span>
             </div>
             <div style="font-size:12.5px;color:var(--body);margin-bottom:6px">${esc(s.desc)}</div>
-            <div style="font-size:11.5px;color:var(--muted)">可用畫面：對練記錄・對練・統計　｜　版本 ${esc(meta.ver)}　｜　維護人 ${esc(meta.owner)}　｜　客戶畫像 ${s.personas.length} 個</div>
+            <div style="font-size:11.5px;color:var(--muted)">可用畫面：對練記錄・對練・統計　｜　版本 ${esc(meta.ver)}　｜　維護人 ${esc(meta.owner)}　｜　客戶畫像 ${s.personas.length} 個　｜　Agent ${ensureAgents(s.id).length} 組（${ensureAgents(s.id).filter(g => g.status === 'on').length} 組啟用）</div>
           </div>
           <button class="btn-ghost" data-act="editscn" data-arg="${s.id}">編輯</button>
         </div>`;
       }).join('')
     : `<div class="card"><table class="tbl">
-        <thead><tr><th>場景</th><th>對練 Agent</th><th>iframe</th><th>你的角色</th><th>預計時長</th><th class="num">狀態</th><th></th></tr></thead>
-        <tbody>${SCENARIOS.map(s => {
-          const meta = SCENARIO_META[s.id];
+        <thead><tr><th>場景</th><th>客戶畫像</th><th>難度</th><th>對練 Agent</th><th>iframe</th><th class="num">狀態</th><th></th></tr></thead>
+        <tbody>${SCENARIOS.flatMap(s => ensureAgents(s.id).map(g => {
+          const p = s.personas.find(x => x.id === g.personaId); const df = DIFF[g.diff];
           return `<tr><td><b>${esc(s.cn)}</b></td>
-            <td class="mono" style="font-size:12px;color:var(--muted)">${esc(meta.agent)}</td>
-            <td class="mono" style="font-size:11.5px;color:${meta.embed ? 'var(--ink)' : 'var(--faint)'}">${meta.embed ? esc(embedSrc(meta.embed) || '已設定') : '未設定'}</td>
-            <td>${esc(s.youRole.cn)}</td><td class="mono">${esc(s.duration)}</td>
-            <td class="num"><span class="pill" style="color:${meta.status === 'on' ? '#1E9E63' : '#7C8992'};background:${meta.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${meta.status === 'on' ? '已啟用' : '未啟用'}</span></td><td class="num"><button class="btn-ghost" data-act="editscn" data-arg="${s.id}" style="padding:6px 10px;font-size:12px">編輯</button></td></tr>`;
-        }).join('')}</tbody></table></div>`;
+            <td>${p ? `<span class="pill" style="color:${p.col};background:${p.col}1f">${esc(p.name)}</span>` : '—'}</td>
+            <td>${df ? `<span class="pill" style="color:${df.col};background:${df.col}1f">${df.cn}</span>` : '—'}</td>
+            <td class="mono" style="font-size:12px;color:var(--muted)">${esc(g.name || '—')}</td>
+            <td class="mono" style="font-size:11.5px;color:${g.embed ? 'var(--ink)' : 'var(--faint)'}">${g.embed ? esc(embedSrc(g.embed) || '已設定') : '未設定'}</td>
+            <td class="num"><span class="pill" style="color:${g.status === 'on' ? '#1E9E63' : '#7C8992'};background:${g.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${g.status === 'on' ? '已啟用' : '未啟用'}</span></td>
+            <td class="num"><button class="btn-ghost sm" data-act="editscn" data-arg="${s.id}">編輯</button></td></tr>`;
+        })).join('')}</tbody></table>
+        <div class="tbl-foot">Agent 依「場景 → 客戶畫像 × 難度」配置；在場景的編輯對話框新增或調整。</div></div>`;
 
   return `<div class="wrap">
     <div class="page-h"><h1>場景設定</h1><p>維護工作場景與對練 Agent；啟用後會出現在左側「工作場景」與場景中心。</p></div>
-    <div class="tabs">${tabs}</div>${body}</div>${viewEditScenarioModal()}`;
+    <div class="tabs">${tabs}</div>${toolbar}${body}</div>${viewEditScenarioModal()}`;
 }
 
 function viewSysMembers() {
@@ -1382,9 +1489,15 @@ const ACTIONS = {
   gran: g => { S.statGran = g; render(); },
   settab: t => { S.settingsTab = t; render(); },
   memtab: t => { S.memberTab = t; render(); },
-  editscn: id => openEditScenario(id),
+  editscn: id => openEditScenario(id || null),
   cancelscn: () => { S.editScenario = null; render(); },
   savescn: () => saveEditScenario(),
+  agentadd: () => agentAdd(),
+  agentdel: i => agentDel(i),
+  personaadd: () => personaAdd(),
+  personadel: i => personaDel(i),
+  scnnew: () => openEditScenario(null),
+  agentnew: () => { const sel = document.getElementById('agent-scn'); openEditScenario(sel ? sel.value : SCENARIOS[0].id, true); },
   dlgcancel: () => closeDlg(),
   memberopen: id => openMember(id),
   membersave: () => saveMember(),
@@ -1427,6 +1540,10 @@ document.addEventListener('input', e => {
   }
   if (f && S.editScenario) {
     const d = S.editScenario.draft;
+    if (f.dataset.field.startsWith('agents.') || f.dataset.field.startsWith('personas.')) {
+      const [list, idx, key] = f.dataset.field.split('.'); const g = d[list][Number(idx)]; if (g) { g[key] = f.value; if (f.tagName === 'SELECT') render(); }
+      return;
+    }
     if (f.dataset.field === 'diffs') {
       const boxes = [...document.querySelectorAll('[data-field="diffs"]')];
       d.diffs = boxes.filter(b => b.checked).map(b => b.value).join(',');
@@ -1466,7 +1583,9 @@ window.addEventListener('hashchange', () => {
   if (c) c.scrollTop = 0;
 });
 
+loadCustomScenarios();
 loadScenarioOverrides();
+SCENARIOS.forEach(s => ensureAgents(s.id));
 loadOrgOverrides();
 loadSessions();
 S.route = parseHash();
