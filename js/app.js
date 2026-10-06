@@ -42,8 +42,29 @@ const DIFF = {
 const scenarioById = id => SCENARIOS.find(s => s.id === id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-const scoreCol = v => v >= 85 ? '#1E9E63' : v >= 75 ? '#E0882E' : '#D81E26';
-const grade = v => v >= 90 ? '優秀' : v >= 80 ? '良好' : v >= 70 ? '合格' : '待提升';
+/* 通過率目標與分級切分：參數設定 › 通過率目標 可調；場景 > 場景類型 > 全行 逐層覆寫 */
+const TARGETS = { passRate: 85, byCat: {}, byScenario: {}, grades: { excellent: 90, good: 80, pass: 70 } };
+const scoreCol = v => v >= TARGETS.grades.excellent ? '#1E9E63' : v >= TARGETS.grades.good ? '#2D6CC0' : v >= TARGETS.grades.pass ? '#E0882E' : '#D81E26';
+const grade = v => v >= TARGETS.grades.excellent ? '優秀' : v >= TARGETS.grades.good ? '良好' : v >= TARGETS.grades.pass ? '合格' : '待提升';
+function targetFor(scId) {
+  const sc = SCENARIOS.find(x => x.id === scId);
+  if (scId && TARGETS.byScenario[scId] != null) return Number(TARGETS.byScenario[scId]);
+  if (sc && TARGETS.byCat[sc.cat] != null) return Number(TARGETS.byCat[sc.cat]);
+  return Number(TARGETS.passRate);
+}
+/* 單場通過判定：依場景評估設定（分數達門檻／達成成交訊號／法遵一票否決）；未評分、逾時一律視為未通過 */
+function sessionPass(r) {
+  if (!r || r.status !== 'done') return { pass: false, why: r && r.status === 'evaluating' ? '評分中' : '未評分' };
+  const ev = ensureEval(r.sc) || { pass: 'score', passScore: 70 };
+  if (ev.veto && r.vetoFail) return { pass: false, why: '法遵一票否決' };
+  if (ev.pass === 'signal') { const ok = r.signal != null ? !!r.signal : r.score >= ev.passScore; return { pass: ok, why: ok ? '達成成交訊號' : '未達成成交訊號' }; }
+  const ok = r.score >= ev.passScore; return { pass: ok, why: `${ok ? '達' : '未達'}門檻 ${ev.passScore} 分` };
+}
+/* 通過率 = 通過次數 ÷ 全部對練次數（含評分中、未評分） */
+function passRate(rows) { const n = rows.length; const k = rows.filter(r => sessionPass(r).pass).length; return { n, k, pct: n ? Math.round(k / n * 100) : null }; }
+function passRateText(pr, target) { return pr.pct == null ? '—' : `${pr.pct}%`; }
+function passRateSub(pr, target) { return pr.pct == null ? `尚無對練・目標 ${target}%` : `${pr.k}／${pr.n} 次・目標 ${target}%${pr.pct >= target ? '・已達標' : `・差 ${target - pr.pct}%`}`; }
+const prCol = (pr, target) => pr.pct == null ? 'var(--muted)' : (pr.pct >= target ? '#1E9E63' : '#D81E26');
 
 /* ------------------------------------------------------------------ icons */
 const I = {
@@ -251,13 +272,28 @@ const SCHEMAS = {
   mocall5: { name: 'mo call 表五項（客服話務）', dims: [{ cn: '開場與核身', en: 'Opening & ID Check' }, { cn: '問題釐清', en: 'Clarification' }, { cn: '解決方案正確性', en: 'Resolution' }, { cn: '服務態度與同理', en: 'Empathy' }, { cn: '效率', en: 'Efficiency' }], veto: false, desc: '依現行 mo call 表評核；效率以通話時間／保留時間計算。' },
 };
 const LS_PARAMS = 'sinopac-coach.params';
-function persistParams() { lsSet(LS_PARAMS, { diff: DIFF, cats: CATS, personaOpts: PERSONA_OPTS, schemas: SCHEMAS }); }
+function persistParams() { lsSet(LS_PARAMS, { diff: DIFF, cats: CATS, personaOpts: PERSONA_OPTS, schemas: SCHEMAS, targets: TARGETS }); }
 function loadParams() {
   const p = lsGet(LS_PARAMS); if (!p) return;
   if (p.diff) { Object.keys(DIFF).forEach(k => delete DIFF[k]); Object.assign(DIFF, p.diff); }
   if (p.cats) { Object.keys(CATS).forEach(k => delete CATS[k]); Object.assign(CATS, p.cats); syncCatDerived(); }
   if (p.personaOpts) Object.assign(PERSONA_OPTS, p.personaOpts);
   if (p.schemas) { Object.keys(SCHEMAS).forEach(k => delete SCHEMAS[k]); Object.assign(SCHEMAS, p.schemas); }
+  if (p.targets) { Object.assign(TARGETS, p.targets); TARGETS.grades = { ...{ excellent: 90, good: 80, pass: 70 }, ...(p.targets.grades || {}) }; TARGETS.byCat = p.targets.byCat || {}; TARGETS.byScenario = p.targets.byScenario || {}; }
+}
+function saveTargets() {
+  const num = sel => { const el = document.querySelector(sel); if (!el) return null; const v = el.value.trim(); return v === '' ? null : Number(v); };
+  const errs = []; const inRange = v => v != null && Number.isFinite(v) && v >= 0 && v <= 100;
+  const g = num('[data-target="passRate"]'); if (!inRange(g)) errs.push('全行通過率目標須為 0–100');
+  const ge = num('[data-target="g.excellent"]'), gg = num('[data-target="g.good"]'), gp = num('[data-target="g.pass"]');
+  if (![ge, gg, gp].every(inRange)) errs.push('分級切分須為 0–100'); else if (!(ge > gg && gg > gp)) errs.push('分級切分須遞減：優秀 > 良好 > 合格');
+  const byCat = {}, bySc = {};
+  document.querySelectorAll('[data-target^="cat."]').forEach(el => { const v = el.value.trim(); if (v === '') return; const n = Number(v); if (!inRange(n)) errs.push(`場景類型「${CATS[el.dataset.target.slice(4)] ? CATS[el.dataset.target.slice(4)].short : el.dataset.target}」目標須為 0–100`); else byCat[el.dataset.target.slice(4)] = n; });
+  document.querySelectorAll('[data-target^="sc."]').forEach(el => { const v = el.value.trim(); if (v === '') return; const n = Number(v); const sc = scenarioById(el.dataset.target.slice(3)); if (!inRange(n)) errs.push(`場景「${sc ? sc.cn : el.dataset.target}」目標須為 0–100`); else bySc[el.dataset.target.slice(3)] = n; });
+  if (errs.length) { S.targetMsg = { err: errs.join('；') }; render(); return; }
+  TARGETS.passRate = g; TARGETS.grades = { excellent: ge, good: gg, pass: gp }; TARGETS.byCat = byCat; TARGETS.byScenario = bySc;
+  persistParams(); audit('更新通過率目標', `全行 ${g}%・類型覆寫 ${Object.keys(byCat).length}・場景覆寫 ${Object.keys(bySc).length}・分級 ${ge}/${gg}/${gp}`, '參數設定');
+  S.targetMsg = { ok: '已儲存，所有通過率卡片與分級即時套用。' }; render();
 }
 /* 評估 Agent（評分 workflow）依場景配置 */
 function ensureEval(id) {
@@ -319,7 +355,7 @@ function personaOptDel(arg) { const [group, idx] = arg.split(':'); const v = PER
 
 function viewSysParams() {
   const tab = S.paramTab || 'diff';
-  const tabs = [['diff', '難度選項'], ['cat', '場景類型'], ['persona', '人設選項'], ['schema', '評分規則']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="paramtab" data-arg="${k}">${l}</button>`).join('');
+  const tabs = [['diff', '難度選項'], ['cat', '場景類型'], ['persona', '人設選項'], ['schema', '評分規則'], ['target', '通過率目標']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="paramtab" data-arg="${k}">${l}</button>`).join('');
   let body = '';
   if (tab === 'diff') {
     body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">這裡維護全行可用的難度選項；每個場景類型再從中挑選自己的難度集合（如信貸電銷 L1–L3、客服話務 一般／客訴），場景與 Agent 只能用所屬類型的難度。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="diff:">＋ 新增難度</button></div></div>
@@ -338,6 +374,20 @@ function viewSysParams() {
       <div class="chks" style="margin-bottom:10px">${PERSONA_OPTS[key].map((v, i) => `<span class="pill opt">${esc(v)}<button data-act="poptdel" data-arg="${key}:${i}" aria-label="移除">×</button></span>`).join('') || '<span style="color:var(--faint);font-size:12.5px">尚無選項</span>'}</div>
       <div style="display:flex;gap:8px"><input id="popt-${key}" class="inp-sm" placeholder="輸入新選項後按新增"><button class="btn-ghost sm" data-act="poptadd" data-arg="${key}">新增</button></div></div>`;
     body = grp('moods', '情緒狀態', '客戶畫像表單的「情緒狀態」建議選項') + grp('risks', '屬性標籤', '客戶畫像表單的「屬性標籤」建議選項') + grp('roles', '學員角色', '場景「你的角色」與場景類型預設角色的選項');
+  } else if (tab === 'target') {
+    const msg = S.targetMsg || {}; const g = TARGETS.grades;
+    const numIn = (key, val, ph) => `<input type="number" min="0" max="100" class="inp-sm" style="width:92px" data-target="${key}" value="${val == null ? '' : esc(String(val))}" placeholder="${esc(ph || '')}">`;
+    const catRows = Object.keys(CATS).map(k => `<tr><td><b>${esc(CATS[k].short)}</b> <span class="mono" style="font-size:11px;color:var(--faint)">${esc(k)}</span></td><td class="mono">${esc(String(TARGETS.passRate))}%</td><td>${numIn('cat.' + k, TARGETS.byCat[k], '沿用全行')}</td><td class="mono">${SCENARIOS.filter(s => s.cat === k).length}</td></tr>`).join('');
+    const scRows = SCENARIOS.map(s => { const inherit = TARGETS.byCat[s.cat] != null ? TARGETS.byCat[s.cat] : TARGETS.passRate; const ev = ensureEval(s.id); return `<tr><td><b>${esc(s.cn)}</b> <span style="color:var(--muted);font-size:12px">${esc(CATS[s.cat] ? CATS[s.cat].short : s.cat)}</span></td><td style="font-size:12px;color:var(--body)">${ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'}${ev.veto ? '・法遵否決' : ''}</td><td class="mono">${esc(String(inherit))}%</td><td>${numIn('sc.' + s.id, TARGETS.byScenario[s.id], '沿用類型')}</td><td class="mono">${(() => { const pr = passRate(SESSIONS.filter(x => x.sc === s.id)); return pr.pct == null ? '—' : `${pr.pct}%（${pr.k}／${pr.n}）`; })()}</td></tr>`; }).join('');
+    body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">通過率 = 通過次數 ÷ 全部對練次數（含評分中與未評分）；單場是否通過依該場景評估 Agent 的「通關判定」。目標值依 場景 › 場景類型 › 全行 逐層覆寫，空白即沿用上一層。</div><div style="margin-left:auto"><button class="btn-primary" data-act="targetsave">儲存</button></div></div>
+      ${msg.err ? `<div class="form-err" style="margin-bottom:12px">${esc(msg.err)}</div>` : ''}${msg.ok ? `<div class="form-ok" style="margin-bottom:12px">${esc(msg.ok)}</div>` : ''}
+      <div class="grid2" style="margin-bottom:14px;align-items:start">
+        <div class="card" style="padding:16px 18px"><b>全行通過率目標</b><small style="display:block;color:var(--muted);margin:4px 0 10px">我的數據、洞察分析與未覆寫的場景類型／場景使用此值</small><div style="display:flex;align-items:center;gap:8px">${numIn('passRate', TARGETS.passRate)}<span>%</span></div></div>
+        <div class="card" style="padding:16px 18px"><b>得分分級切分</b><small style="display:block;color:var(--muted);margin:4px 0 10px">複盤報告、對練記錄與洞察分析的分級標籤；低於「合格」為待提升</small>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center"><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">優秀 ≥ ${numIn('g.excellent', g.excellent)}</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">良好 ≥ ${numIn('g.good', g.good)}</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">合格 ≥ ${numIn('g.pass', g.pass)}</label></div></div>
+      </div>
+      <div class="card" style="margin-bottom:14px"><div class="card-h"><h2>依場景類型覆寫</h2><div class="sub">空白沿用全行</div></div><table class="tbl" style="margin-top:10px"><thead><tr><th>場景類型</th><th>沿用值</th><th>覆寫目標（%）</th><th>場景數</th></tr></thead><tbody>${catRows}</tbody></table></div>
+      <div class="card"><div class="card-h"><h2>依場景覆寫</h2><div class="sub">空白沿用場景類型；通關判定在場景設定 › 編輯 › 評估 Agent</div></div><table class="tbl" style="margin-top:10px"><thead><tr><th>場景</th><th>單場通關判定</th><th>沿用值</th><th>覆寫目標（%）</th><th>目前通過率（全部記錄）</th></tr></thead><tbody>${scRows}</tbody></table></div>`;
   } else {
     body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">評分規則定義複盤報告的能力維度；場景的評估 Agent 從這裡選用。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="schema:">＋ 新增評分規則</button></div></div>
       ${Object.keys(SCHEMAS).map(k => { const s = SCHEMAS[k]; const n = SCENARIOS.filter(x => (SCENARIO_META[x.id].eval || {}).schema === k).length; return `<div class="card" style="padding:16px 18px;margin-bottom:12px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><b>${esc(s.name)}</b><span class="mono" style="font-size:11px;color:var(--faint)">${esc(k)}</span>${s.veto ? '<span class="pill bad">法遵一票否決</span>' : ''}<span class="pill info">${n} 個場景使用</span>
@@ -345,7 +395,7 @@ function viewSysParams() {
         <div class="chks" style="margin-bottom:8px">${s.dims.map((d, i) => `<span class="pill" style="color:var(--blue);background:#EDF3FB">${i + 1}. ${esc(d.cn)}${d.en ? ` <small style="opacity:.7">${esc(d.en)}</small>` : ''}</span>`).join('')}</div>
         <div style="font-size:12.5px;color:var(--body)">${esc(s.desc || '')}</div></div>`; }).join('')}`;
   }
-  return `<div class="wrap"><div class="page-h"><h1>參數設定</h1><p>難度選項、場景類型、人設選項與評分規則；場景與客戶畫像的表單直接讀取這裡的設定。</p></div><div class="tabs">${tabs}</div>${body}</div>${viewDlg()}`;
+  return `<div class="wrap"><div class="page-h"><h1>參數設定</h1><p>難度選項、場景類型、人設選項、評分規則與通過率目標；場景、客戶畫像與各報表直接讀取這裡的設定。</p></div><div class="tabs">${tabs}</div>${body}</div>${viewDlg()}`;
 }
 
 const OVERRIDE_KEY = 'sinopac-coach.scenarioOverrides';
@@ -1048,9 +1098,11 @@ function viewRecords(sc) {
   const body = rows.map(r => {
     const m = memberById(r.member) || {};
     const d = DIFF[r.diff];
+    const pr0 = sessionPass(r);
     const status = r.status === 'done'
       ? `<b class="mono" style="color:${scoreCol(r.score)};font-size:14px">${r.score}</b>
-         <span class="pill" style="color:${scoreCol(r.score)};background:${scoreCol(r.score)}1f;margin-left:7px">${grade(r.score)}</span>`
+         <span class="pill" style="color:${scoreCol(r.score)};background:${scoreCol(r.score)}1f;margin-left:7px">${grade(r.score)}</span>
+         <span class="pill ${pr0.pass ? 'good' : 'bad'}" style="margin-left:5px" title="${esc(pr0.why)}">${pr0.pass ? '通過' : '未通過'}</span>`
       : r.status === 'evaluating'
         ? `<button class="pill-btn" data-act="rescore" data-arg="${r.id}" title="若 workflow 未成功觸發，點擊重新觸發評分"><span class="spin" style="width:11px;height:11px;border-width:2px"></span>正在評估中 · 重新觸發</button>`
         : `<span class="pill" style="color:#667085;background:#F4F7F8" title="${esc(r.failReason || '')}">暫無評分${r.failReason ? ' · 逾時' : ''}</span> <button class="btn-ghost sm" data-act="rescore" data-arg="${r.id}" title="${esc(r.failReason || '重新評分')}">↻ 重新評分</button>`;
@@ -1068,8 +1120,15 @@ function viewRecords(sc) {
     </tr>`;
   }).join('');
 
+  const target = targetFor(sc.id); const prAll = passRate(rows); const prMine = passRate(rows.filter(r => r.member === S.user.id));
+  const prStrip = `<div class="pr-strip">
+      <div><span class="l">${full ? '可視範圍通過率' : '我的通過率'}</span><b style="color:${prCol(full ? prAll : prMine, target)}">${passRateText(full ? prAll : prMine)}</b><span class="s">${esc(passRateSub(full ? prAll : prMine, target))}</span></div>
+      ${full && prMine.n ? `<div><span class="l">我的通過率</span><b style="color:${prCol(prMine, target)}">${passRateText(prMine)}</b><span class="s">${esc(passRateSub(prMine, target))}</span></div>` : ''}
+      <div class="hint">通過率 = 通過次數 ÷ 全部對練次數；單場判定：${(() => { const ev = ensureEval(sc.id); return ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'; })()}${ensureEval(sc.id).veto ? '，法遵一票否決' : ''}。目標可在參數設定調整。</div>
+    </div>`;
   return `<div class="wrap">
     <div class="page-h"><h1>對練記錄</h1><p>${esc(sc.desc)}</p></div>
+    ${prStrip}
     <div class="filters">
       <button class="btn-primary" data-act="goto" data-arg="#/s/${sc.id}/new">${svg(I.play, 16)}發起對練</button>
       <div class="inp" style="margin-left:auto">${svg(I.search, 15)}
@@ -1277,6 +1336,7 @@ function viewReport(sc, sessionId) {
           <div><div class="v">${esc(session.dur)}</div><div class="l">對練時長</div></div>
           <div><div class="v">${words.toLocaleString()}</div><div class="l">對話字數</div></div>
           <div><div class="v" style="color:${compliance ? 'var(--red)' : '#1E9E63'}">${compliance}</div><div class="l">合規提醒</div></div>
+          ${(() => { const pr = sessionPass(session); return `<div><div class="v" style="font-size:16px;color:${evaluating ? 'var(--muted)' : (pr.pass ? '#1E9E63' : 'var(--red)')}">${evaluating ? '—' : (pr.pass ? '通過' : '未通過')}</div><div class="l" title="${esc(pr.why)}">通關判定・${esc(pr.why)}</div></div>`; })()}
           <div><div class="v" style="font-size:14px;color:var(--muted)">${esc(session.date)}</div><div class="l">完成時間</div></div>
         </div>
       </div>
@@ -1327,11 +1387,11 @@ function viewScenarioStats(sc) {
     `<div class="bar-row"><div class="lb"><span>${esc(k)}</span><span>${v}</span></div>
      <div class="bar-track"><div class="bar-fill" style="width:${v / maxP * 100}%;background:linear-gradient(90deg,#EE6A60,#D81E26)"></div></div></div>`).join('');
 
-  const byMember = {};
-  rows.forEach(r => { const n = (memberById(r.member) || {}).name || '—'; byMember[n] = (byMember[n] || 0) + 1; });
-  const maxM = Math.max(1, ...Object.values(byMember));
+  const byMember = {}; const byMemberRows = {};
+  rows.forEach(r => { const n = (memberById(r.member) || {}).name || '—'; byMember[n] = (byMember[n] || 0) + 1; (byMemberRows[n] = byMemberRows[n] || []).push(r); });
+  const maxM = Math.max(1, ...Object.values(byMember)); const tgt = targetFor(sc.id);
   const memberBars = Object.entries(byMember).map(([k, v]) =>
-    `<div class="bar-row"><div class="lb"><span>${esc(k)}</span><span>${v}</span></div>
+    `<div class="bar-row"><div class="lb"><span>${esc(k)}</span><span>${v} 次・<b style="color:${prCol(passRate(byMemberRows[k]), tgt)}">通過 ${passRateText(passRate(byMemberRows[k]))}</b></span></div>
      <div class="bar-track"><div class="bar-fill" style="width:${v / maxM * 100}%;background:linear-gradient(90deg,#3CC0B4,#009E96)"></div></div></div>`).join('');
 
   const recent = rows.slice(0, 6).map(r => {
@@ -1345,10 +1405,11 @@ function viewScenarioStats(sc) {
     <div class="page-h"><h1>對練統計 <span class="tag-mgr">主管模組</span></h1><p>${esc(sc.desc)}</p></div>
     <div class="scope-note">${esc(scopeLabel(S.user))}</div>
     <div class="filters"><div class="seg">${gran}</div></div>
-    <div class="kpis">
+    <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
       ${kpi('練', '對練場次', rows.length, '選定區間', '#D81E26')}
       ${kpi('完', '已完成', done.length, `待評 ${rows.length - done.length}`, '#1E9E63')}
       ${kpi('分', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 份評分`, '#E0882E')}
+      ${(() => { const pr = passRate(rows); const t = targetFor(sc.id); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, t), prCol(pr, t)); })()}
       ${kpi('人', '參與人數', new Set(rows.map(r => r.member)).size, '有對練記錄', '#2D6CC0')}
     </div>
     <div class="grid2" style="margin-bottom:18px;align-items:start">
@@ -1372,6 +1433,11 @@ function viewMe() {
   const mine = SESSIONS.filter(s => s.member === S.user.id);
   const done = mine.filter(s => s.status === 'done');
   const avg = done.length ? (done.reduce((x, y) => x + y.score, 0) / done.length) : 0;
+  const prMine = passRate(mine);
+  const scPassRows = SCENARIOS.filter(s => mine.some(r => r.sc === s.id)).map(s => {
+    const pr = passRate(mine.filter(r => r.sc === s.id)); const t = targetFor(s.id); const ev = ensureEval(s.id);
+    return `<tr class="clickable" data-act="goto" data-arg="#/s/${s.id}/records"><td><b>${esc(s.cn)}</b></td><td style="font-size:12px;color:var(--body)">${ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'}${ev.veto ? '・法遵否決' : ''}</td><td class="num mono">${pr.n}</td><td class="num mono">${pr.k}</td><td class="num"><b class="mono" style="color:${prCol(pr, t)}">${passRateText(pr)}</b></td><td class="num mono">${t}%</td><td>${pr.pct == null ? '—' : pr.pct >= t ? '<span class="pill good">已達標</span>' : `<span class="pill bad">差 ${t - pr.pct}%</span>`}</td></tr>`;
+  }).join('');
 
   const W = 620, H = 200, padX = 22, padTop = 16, padBot = 30, n = a.trend.length;
   const xs = i => padX + i * ((W - 2 * padX) / (n - 1));
@@ -1409,8 +1475,10 @@ function viewMe() {
       ${kpi('練', '累計對練', mine.length, `本月 +${Math.min(mine.length, 3)}`, '#D81E26')}
       ${kpi('分', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#E0882E')}
       ${kpi('時', '練習時長', a.kpis[2].val, a.kpis[2].sub, '#009E96')}
-      ${kpi('達', '達標率', a.kpis[3].val, a.kpis[3].sub, '#2D6CC0')}
+      ${kpi('過', '通過率', passRateText(prMine), passRateSub(prMine, TARGETS.passRate), prCol(prMine, TARGETS.passRate))}
     </div>
+    <div class="card" style="margin-bottom:18px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">通過次數 ÷ 全部對練次數・目標依場景設定</div></div>
+      <table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>單場通關判定</th><th class="num">對練次數</th><th class="num">通過</th><th class="num">通過率</th><th class="num">目標</th><th>狀態</th></tr></thead><tbody>${scPassRows || '<tr><td colspan="7" class="empty">尚無對練記錄</td></tr>'}</tbody></table></div>
     <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:18px;align-items:start">
       <div class="card"><div class="card-h"><h2>得分趨勢</h2><div class="sub">SCORE TREND</div></div>
         <div class="card-b"><svg viewBox="0 0 620 200" style="width:100%;height:auto">
@@ -1446,20 +1514,21 @@ function viewInsights() {
   const unitAgg = {};
   rows.forEach(r => {
     const m = memberById(r.member); if (!m) return;
-    const u = unitAgg[m.unit] || (unitAgg[m.unit] = { n: 0, sum: 0, scored: 0 });
-    u.n++; if (r.status === 'done') { u.sum += r.score; u.scored++; }
+    const u = unitAgg[m.unit] || (unitAgg[m.unit] = { n: 0, sum: 0, scored: 0, rows: [] });
+    u.n++; u.rows.push(r); if (r.status === 'done') { u.sum += r.score; u.scored++; }
   });
   const unitRows = Object.entries(unitAgg).sort((a, b) => (b[1].scored ? b[1].sum / b[1].scored : 0) - (a[1].scored ? a[1].sum / a[1].scored : 0))
     .map(([u, v], i) => {
       const s = v.scored ? v.sum / v.scored : 0;
       return `<div class="bar-row"><div class="lb">
-        <span><b style="color:var(--ink)">${i + 1}. ${esc(UNITS[u] || u)}</b>　<span style="color:var(--muted)">${v.n} 場</span></span>
+        <span><b style="color:var(--ink)">${i + 1}. ${esc(UNITS[u] || u)}</b>　<span style="color:var(--muted)">${v.n} 場・通過 <b style="color:${prCol(passRate(v.rows), TARGETS.passRate)}">${passRateText(passRate(v.rows))}</b></span></span>
         <span style="color:${scoreCol(s)};font-weight:700">${s ? s.toFixed(1) : '—'}</span></div>
         <div class="bar-track"><div class="bar-fill" style="width:${s ? s : 0}%;background:linear-gradient(90deg,${scoreCol(s)}99,${scoreCol(s)})"></div></div></div>`;
     }).join('');
 
-  const buckets = [['優秀（90 分以上）', '#1E9E63', r => r.score >= 90], ['良好（80–89 分）', '#2D6CC0', r => r.score >= 80 && r.score < 90],
-                   ['合格（70–79 分）', '#E0882E', r => r.score >= 70 && r.score < 80], ['待提升（70 分以下）', '#D81E26', r => r.score < 70]];
+  const G = TARGETS.grades;
+  const buckets = [[`優秀（${G.excellent} 分以上）`, '#1E9E63', r => r.score >= G.excellent], [`良好（${G.good}–${G.excellent - 1} 分）`, '#2D6CC0', r => r.score >= G.good && r.score < G.excellent],
+                   [`合格（${G.pass}–${G.good - 1} 分）`, '#E0882E', r => r.score >= G.pass && r.score < G.good], [`待提升（${G.pass} 分以下）`, '#D81E26', r => r.score < G.pass]];
   const total = done.length || 1;
   const distRows = buckets.map(([l, c, f]) => {
     const n = done.filter(f).length;
@@ -1471,19 +1540,21 @@ function viewInsights() {
   const board = people.map(m => {
     const mine = rows.filter(r => r.member === m.id && r.status === 'done');
     const s = mine.length ? mine.reduce((a, b) => a + b.score, 0) / mine.length : 0;
-    return { m, n: rows.filter(r => r.member === m.id).length, s };
+    return { m, n: rows.filter(r => r.member === m.id).length, s, pr: passRate(rows.filter(r => r.member === m.id)) };
   }).sort((a, b) => b.s - a.s).map((x, i) => `<tr>
       <td class="mono" style="color:var(--muted)">${i + 1}</td>
       <td><b>${esc(x.m.name)}</b>${x.m.id === S.user.id ? ' <span class="pill" style="color:var(--red);background:var(--red-soft)">我</span>' : ''}</td>
       <td>${esc(UNITS[x.m.unit])}</td><td>${esc(ROLES[x.m.role].cn)}</td>
       <td class="mono">${x.n}</td>
+      <td class="num"><b class="mono" style="color:${prCol(x.pr, TARGETS.passRate)}">${passRateText(x.pr)}</b></td>
       <td class="num"><b class="mono" style="color:${scoreCol(x.s)}">${x.s ? x.s.toFixed(1) : '—'}</b></td></tr>`).join('');
 
   return `<div class="wrap">
     <div class="page-h"><h1>洞察分析 <span class="tag-mgr">主管模組</span></h1><p>跨場景的團隊表現：依組織層級彙總。</p></div>
     <div class="scope-note">${esc(scopeLabel(S.user))}</div>
-    <div class="kpis">
+    <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
       ${kpi('均', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#D81E26')}
+      ${(() => { const pr = passRate(rows); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, TARGETS.passRate), prCol(pr, TARGETS.passRate)); })()}
       ${kpi('場', '對練場次', rows.length, `${rows.length - done.length} 場待評`, '#2D6CC0')}
       ${kpi('人', '覆蓋人數', new Set(rows.map(r => r.member)).size, `可視成員 ${people.length} 人`, '#009E96')}
       ${kpi('景', '涵蓋場景', new Set(rows.map(r => r.sc)).size, `共 ${SCENARIOS.length} 個場景`, '#6A5BC4')}
@@ -1493,7 +1564,7 @@ function viewInsights() {
       <div class="card"><div class="card-h"><h2>得分分級分布</h2><div class="sub">共 ${done.length} 場已評分</div></div><div class="card-b">${distRows}</div></div>
     </div>
     <div class="card"><div class="card-h"><h2>人員排行</h2><div class="sub">可視範圍內的成員</div></div>
-      <table class="tbl" style="margin-top:12px"><thead><tr><th>#</th><th>姓名</th><th>所屬單位</th><th>角色</th><th>對練</th><th class="num">平均分</th></tr></thead>
+      <table class="tbl" style="margin-top:12px"><thead><tr><th>#</th><th>姓名</th><th>所屬單位</th><th>角色</th><th>對練</th><th class="num">通過率</th><th class="num">平均分</th></tr></thead>
       <tbody>${board}</tbody></table>
       <div class="tbl-foot">${esc(scopeLabel(S.user))}</div></div>
   </div>`;
@@ -1787,7 +1858,9 @@ function finishScoring(id) {
     const r1 = S.route; if (r1.name === 'scenario' || r1.name === 'me' || r1.name === 'hub') render(); return;
   }
   const r = simulateScore(s);
-  Object.assign(s, { status: 'done', score: r.overall, dims: r.dims, compliance: r.compliance, words: r.words, scoredAt: Date.now() });
+  // 模擬評估 Agent 回傳的通關訊號與法遵檢核：成交訊號 ≈ 分數過門檻且非特定種子；法遵否決：合規提醒 ≥ 3 且特定種子
+  const ev0 = ensureEval(s.sc); const signal = r.overall >= (ev0 ? ev0.passScore : 70) && seed % 5 !== 0; const vetoFail = r.compliance >= 3 && seed % 7 === 0;
+  Object.assign(s, { status: 'done', score: r.overall, dims: r.dims, compliance: r.compliance, words: r.words, signal, vetoFail, scoredAt: Date.now() });
   persistSessions(); audit('完成對練', `${s.id.slice(0, 8)} ${scenarioById(s.sc) ? scenarioById(s.sc).cn : s.sc}・已評分（${s.score}）`, '對練場景');
   delete S.scoringTimers[id];
   const r0 = S.route; if (r0.name === 'scenario' && (r0.tab === 'records' || (r0.tab === 'report' && r0.arg === id))) render();
@@ -1915,7 +1988,8 @@ const ACTIONS = {
   orgcsvparse: () => orgCsvParse(),
   orgcsvimport: () => orgCsvImport(),
   roleopen: code => openRole(code || null),
-  paramtab: t => { S.paramTab = t; render(); },
+  paramtab: t => { S.paramTab = t; S.targetMsg = null; render(); },
+  targetsave: () => saveTargets(),
   scndel: id => openDeleteScenario(id),
   scndelconfirm: () => confirmDeleteScenario(),
   paramopen: arg => { const [kind, code] = arg.split(':'); openParam(kind, code || null); },
