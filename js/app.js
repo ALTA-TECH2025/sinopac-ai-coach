@@ -23,6 +23,7 @@ const S = {
   editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
   dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
   memberSearch: '',
+  paramTab: 'diff',
   replay: { sessionId: null, time: 0, playing: false, voice: true, timer: null, lastIdx: -1 },
   scoringTimers: {},
 };
@@ -84,6 +85,7 @@ function visibleSessions() {
   return SESSIONS.filter(s => ids.includes(s.member));
 }
 
+function sessionsAll(scenarioId) { return SESSIONS.filter(s => s.sc === scenarioId).length; }
 function sessionsFor(scenarioId) {
   return visibleSessions().filter(s => s.sc === scenarioId);
 }
@@ -161,10 +163,11 @@ function viewSidebar() {
   const sysGroup = CAN.settings(S.user)
     ? `<div class="nav-group">系統設定</div>
        ${navItem('#/sys/scenarios', I.cog, '場景設定', { on: r.name === 'sys' && r.tab === 'scenarios' })}
+       ${navItem('#/sys/params', I.chart, '參數設定', { on: r.name === 'sys' && r.tab === 'params' })}
        ${navItem('#/sys/members', I.people, '成員權限', { on: r.name === 'sys' && r.tab === 'members', badge: MEMBERS.length })}
        ${navItem('#/sys/audit', I.clock, '操作記錄', { on: r.name === 'sys' && r.tab === 'audit' })}`
     : (CAN.scenarioSettings(S.user)
-        ? `<div class="nav-group">系統設定</div>${navItem('#/sys/scenarios', I.cog, '場景設定', { on: r.name === 'sys' && r.tab === 'scenarios' })}`
+        ? `<div class="nav-group">系統設定</div>${navItem('#/sys/scenarios', I.cog, '場景設定', { on: r.name === 'sys' && r.tab === 'scenarios' })}${navItem('#/sys/params', I.chart, '參數設定', { on: r.name === 'sys' && r.tab === 'params' })}`
         : '');
 
   return `<aside class="side">
@@ -218,8 +221,117 @@ function viewCrumb(parts, opts = {}) {
 }
 
 /* ------------------------------------------------------------------ 場景設定：編輯與本機保存 */
-const CAT_LABEL = { credit: '信貸電銷 · Telesales', service: '客服話務 · Service' };
-const DIFF_SETS = { credit: ['L1', 'L2', 'L3'], service: ['normal', 'complaint'] };
+/* ---- 參數設定：場景類型、難度選項、人設選項、評分規則（獨立頁 #/sys/params），場景與客戶畫像表單直接讀取 ---- */
+const CATS = {
+  credit:  { label: '信貸電銷 · Telesales', short: '信貸電銷', diffs: ['L1', 'L2', 'L3'], role: '電銷專員' },
+  service: { label: '客服話務 · Service',   short: '客服話務', diffs: ['normal', 'complaint'], role: '客服專員' },
+};
+const CAT_LABEL = {}; const DIFF_SETS = {};
+function syncCatDerived() { Object.keys(CAT_LABEL).forEach(k => delete CAT_LABEL[k]); Object.keys(DIFF_SETS).forEach(k => delete DIFF_SETS[k]); Object.keys(CATS).forEach(k => { CAT_LABEL[k] = CATS[k].label; DIFF_SETS[k] = CATS[k].diffs.slice(); }); }
+syncCatDerived();
+const PERSONA_OPTS = {
+  moods: ['客氣、反覆拖延', '高度懷疑、須家人參與', '理性、逐項比對', '施壓、威脅撤件', '聽不懂術語、需多次說明', '憤怒、咆哮', '焦慮、激動', '謹慎、重複確認'],
+  risks: ['受薪階級 · 年收入 80 萬', '自營商 · 中高齡', '已核准 80 萬 · 他行 2.5%', '往來 12 年 · 薪轉戶', '網銀登入 · 高齡', '拒訪登記 · 不配合核身', '刷卡失敗 · 櫃檯前', '年費 · 分期手續費'],
+  roles: ['電銷專員', '客服專員', '理財專員', '催收專員', '臨櫃專員'],
+};
+const SCHEMAS = {
+  credit4: { name: 'Agent1 四構面（信貸電銷）', dims: [{ cn: '搜身資訊', en: 'Info Gathering' }, { cn: '銷售堅持', en: 'Persistence' }, { cn: '需求挖掘', en: 'Needs Discovery' }, { cn: '異議處理', en: 'Objection Handling' }], veto: true, desc: '四構面等權重，每構面 5 細項 0–5 分；依人設標記必評／選評／不適用；法遵 14 項一票否決。' },
+  mocall5: { name: 'mo call 表五項（客服話務）', dims: [{ cn: '開場與核身', en: 'Opening & ID Check' }, { cn: '問題釐清', en: 'Clarification' }, { cn: '解決方案正確性', en: 'Resolution' }, { cn: '服務態度與同理', en: 'Empathy' }, { cn: '效率', en: 'Efficiency' }], veto: false, desc: '依現行 mo call 表評核；效率以通話時間／保留時間計算。' },
+};
+const LS_PARAMS = 'sinopac-coach.params';
+function persistParams() { lsSet(LS_PARAMS, { diff: DIFF, cats: CATS, personaOpts: PERSONA_OPTS, schemas: SCHEMAS }); }
+function loadParams() {
+  const p = lsGet(LS_PARAMS); if (!p) return;
+  if (p.diff) { Object.keys(DIFF).forEach(k => delete DIFF[k]); Object.assign(DIFF, p.diff); }
+  if (p.cats) { Object.keys(CATS).forEach(k => delete CATS[k]); Object.assign(CATS, p.cats); syncCatDerived(); }
+  if (p.personaOpts) Object.assign(PERSONA_OPTS, p.personaOpts);
+  if (p.schemas) { Object.keys(SCHEMAS).forEach(k => delete SCHEMAS[k]); Object.assign(SCHEMAS, p.schemas); }
+}
+/* 評估 Agent（評分 workflow）依場景配置 */
+function ensureEval(id) {
+  const sc = scenarioById(id); const meta = SCENARIO_META[id]; if (!sc || !meta) return null;
+  if (!meta.eval) {
+    const credit = sc.cat === 'credit';
+    meta.eval = { name: credit ? 'altabots · 信貸評估 Agent（Agent1 評分）' : 'altabots · 客服評估 Agent（mo call 表）', schema: credit ? 'credit4' : 'mocall5',
+      workflow: credit ? 'wf_credit_eval' : 'wf_service_eval', timeoutSec: 60, pass: credit ? 'signal' : 'score', passScore: 70, veto: credit };
+  }
+  return meta.eval;
+}
+function diffInUse(code) {
+  return SCENARIOS.some(s => (s.diffs || []).includes(code) || s.personas.some(p => p.diff === code) || (SCENARIO_META[s.id].agents || []).some(g => g.diff === code)) || SESSIONS.some(x => x.diff === code);
+}
+function openParam(kind, code) {
+  if (kind === 'diff') { const d = code ? DIFF[code] : null; openDlg('diff', d ? { code, cn: d.cn, en: d.en, col: d.col, desc: d.desc } : { code: '', cn: '', en: '', col: '#2D6CC0', desc: '' }); }
+  else if (kind === 'cat') { const d = code ? CATS[code] : null; openDlg('cat', d ? { code, short: d.short, label: d.label, diffs: d.diffs.join(','), role: d.role } : { code: '', short: '', label: '', diffs: Object.keys(DIFF).slice(0, 3).join(','), role: PERSONA_OPTS.roles[0] || '' }); }
+  else if (kind === 'schema') { const d = code ? SCHEMAS[code] : null; openDlg('schema', d ? { code, name: d.name, dimsText: d.dims.map(x => x.cn + (x.en ? ' / ' + x.en : '')).join('\n'), veto: !!d.veto, desc: d.desc || '' } : { code: '', name: '', dimsText: '', veto: false, desc: '' }); }
+}
+function saveParam() {
+  const g = S.dlg; const d = g.draft; const errs = [];
+  const codeOk = v => /^[A-Za-z][A-Za-z0-9_]{0,23}$/.test(v);
+  if (g.kind === 'diff') {
+    const code = d.code || (d.newCode || '').trim();
+    if (!d.cn.trim()) errs.push('名稱必填'); if (!d.code && !codeOk(code)) errs.push('代碼須為英文開頭的英數字'); if (!d.code && DIFF[code]) errs.push('代碼已存在');
+    if (!/^#[0-9A-Fa-f]{6}$/.test(d.col.trim())) errs.push('顏色須為 #RRGGBB');
+    if (errs.length) { g.error = errs.join('；'); render(); return; }
+    DIFF[code] = { cn: d.cn.trim(), en: d.en.trim(), col: d.col.trim(), desc: d.desc.trim() }; audit(d.code ? '編輯難度' : '新增難度', `${DIFF[code].cn}（${code}）`, '參數設定');
+  } else if (g.kind === 'cat') {
+    const code = d.code || (d.newCode || '').trim();
+    if (!d.short.trim()) errs.push('名稱必填'); if (!d.code && !codeOk(code)) errs.push('代碼須為英文開頭的英數字'); if (!d.code && CATS[code]) errs.push('代碼已存在');
+    const diffs = d.diffs.split(',').map(x => x.trim()).filter(k => DIFF[k]); if (!diffs.length) errs.push('至少勾選一個難度');
+    if (errs.length) { g.error = errs.join('；'); render(); return; }
+    CATS[code] = { short: d.short.trim(), label: d.label.trim() || d.short.trim(), diffs, role: d.role.trim() }; syncCatDerived();
+    SCENARIOS.forEach(s => { if (s.cat === code) s.catCn = CATS[code].label; });
+    audit(d.code ? '編輯場景類型' : '新增場景類型', `${CATS[code].short}（${code}）`, '參數設定');
+  } else if (g.kind === 'schema') {
+    const code = d.code || (d.newCode || '').trim();
+    if (!d.name.trim()) errs.push('名稱必填'); if (!d.code && !codeOk(code)) errs.push('代碼須為英文開頭的英數字'); if (!d.code && SCHEMAS[code]) errs.push('代碼已存在');
+    const dims = d.dimsText.split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [cn, en] = l.split('/').map(x => x.trim()); return { cn, en: en || '' }; });
+    if (dims.length < 2) errs.push('至少兩個評分維度（每行一個，可用「中文 / English」）');
+    if (errs.length) { g.error = errs.join('；'); render(); return; }
+    SCHEMAS[code] = { name: d.name.trim(), dims, veto: !!d.veto, desc: d.desc.trim() }; audit(d.code ? '編輯評分規則' : '新增評分規則', `${SCHEMAS[code].name}（${code}）・${dims.length} 維`, '參數設定');
+  }
+  persistParams(); S.dlg = null; render();
+}
+function deleteParam(kind, code) {
+  if (kind === 'diff') { if (diffInUse(code)) { alert('此難度仍被場景、客戶畫像、Agent 或對練場次使用，無法刪除'); return; } if (!confirm(`刪除難度「${DIFF[code].cn}」？`)) return; audit('刪除難度', `${DIFF[code].cn}（${code}）`, '參數設定'); delete DIFF[code]; Object.keys(CATS).forEach(k => { CATS[k].diffs = CATS[k].diffs.filter(x => x !== code); }); syncCatDerived(); }
+  else if (kind === 'cat') { if (SCENARIOS.some(s => s.cat === code)) { alert('仍有場景使用此類型，無法刪除'); return; } if (!confirm(`刪除場景類型「${CATS[code].short}」？`)) return; audit('刪除場景類型', `${CATS[code].short}（${code}）`, '參數設定'); delete CATS[code]; syncCatDerived(); }
+  else if (kind === 'schema') { if (SCENARIOS.some(s => (SCENARIO_META[s.id].eval || {}).schema === code)) { alert('仍有場景的評估 Agent 使用此評分規則，無法刪除'); return; } if (!confirm(`刪除評分規則「${SCHEMAS[code].name}」？`)) return; audit('刪除評分規則', `${SCHEMAS[code].name}（${code}）`, '參數設定'); delete SCHEMAS[code]; }
+  persistParams(); render();
+}
+function personaOptAdd(group) { const inp = document.getElementById('popt-' + group); const v = inp ? inp.value.trim() : ''; if (!v) return; if (!PERSONA_OPTS[group].includes(v)) PERSONA_OPTS[group].push(v); persistParams(); audit('新增人設選項', `${{ moods: '情緒狀態', risks: '屬性標籤', roles: '學員角色' }[group]}：${v}`, '參數設定'); render(); }
+function personaOptDel(arg) { const [group, idx] = arg.split(':'); const v = PERSONA_OPTS[group][Number(idx)]; PERSONA_OPTS[group].splice(Number(idx), 1); persistParams(); audit('刪除人設選項', `${{ moods: '情緒狀態', risks: '屬性標籤', roles: '學員角色' }[group]}：${v}`, '參數設定'); render(); }
+
+function viewSysParams() {
+  const tab = S.paramTab || 'diff';
+  const tabs = [['diff', '難度選項'], ['cat', '場景類型'], ['persona', '人設選項'], ['schema', '評分規則']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="paramtab" data-arg="${k}">${l}</button>`).join('');
+  let body = '';
+  if (tab === 'diff') {
+    body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">難度集合由場景類型預設、場景可再勾選；這裡維護可用的難度選項。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="diff:">＋ 新增難度</button></div></div>
+      <div class="card"><table class="tbl"><thead><tr><th>代碼</th><th>名稱</th><th>英文</th><th>顏色</th><th>說明</th><th>使用中</th><th class="num">操作</th></tr></thead><tbody>
+      ${Object.keys(DIFF).map(k => { const d = DIFF[k]; const used = diffInUse(k); return `<tr><td class="mono">${esc(k)}</td><td><span class="pill" style="color:${d.col};background:${d.col}1f">${esc(d.cn)}</span></td><td style="color:var(--muted)">${esc(d.en || '')}</td><td><span class="swatch" style="background:${d.col}"></span><span class="mono" style="font-size:11.5px">${esc(d.col)}</span></td><td style="font-size:12.5px;color:var(--body)">${esc(d.desc || '')}</td><td>${used ? '<span class="pill info">使用中</span>' : '<span class="pill" style="color:var(--faint);background:var(--soft)">未使用</span>'}</td>
+        <td class="num" style="white-space:nowrap"><button class="btn-ghost sm" data-act="paramopen" data-arg="diff:${k}">編輯</button> <button class="btn-ghost sm danger" data-act="paramdel" data-arg="diff:${k}" ${used ? 'disabled' : ''}>刪除</button></td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  } else if (tab === 'cat') {
+    body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">場景類型決定場景中心的分類頁籤、預設難度集合與預設學員角色。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="cat:">＋ 新增類型</button></div></div>
+      <div class="card"><table class="tbl"><thead><tr><th>代碼</th><th>名稱</th><th>完整標籤</th><th>預設難度集合</th><th>預設學員角色</th><th>場景數</th><th class="num">操作</th></tr></thead><tbody>
+      ${Object.keys(CATS).map(k => { const d = CATS[k]; const n = SCENARIOS.filter(s => s.cat === k).length; return `<tr><td class="mono">${esc(k)}</td><td><b>${esc(d.short)}</b></td><td style="color:var(--muted)">${esc(d.label)}</td><td>${d.diffs.map(x => DIFF[x] ? `<span class="pill" style="color:${DIFF[x].col};background:${DIFF[x].col}1f;margin-right:4px">${esc(DIFF[x].cn)}</span>` : '').join('')}</td><td>${esc(d.role)}</td><td class="mono">${n}</td>
+        <td class="num" style="white-space:nowrap"><button class="btn-ghost sm" data-act="paramopen" data-arg="cat:${k}">編輯</button> <button class="btn-ghost sm danger" data-act="paramdel" data-arg="cat:${k}" ${n ? 'disabled' : ''}>刪除</button></td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  } else if (tab === 'persona') {
+    const grp = (key, title, hint) => `<div class="card" style="padding:16px 18px;margin-bottom:12px"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px"><b>${title}</b><small style="color:var(--muted)">${hint}</small></div>
+      <div class="chks" style="margin-bottom:10px">${PERSONA_OPTS[key].map((v, i) => `<span class="pill opt">${esc(v)}<button data-act="poptdel" data-arg="${key}:${i}" aria-label="移除">×</button></span>`).join('') || '<span style="color:var(--faint);font-size:12.5px">尚無選項</span>'}</div>
+      <div style="display:flex;gap:8px"><input id="popt-${key}" class="inp-sm" placeholder="輸入新選項後按新增"><button class="btn-ghost sm" data-act="poptadd" data-arg="${key}">新增</button></div></div>`;
+    body = grp('moods', '情緒狀態', '客戶畫像表單的「情緒狀態」建議選項') + grp('risks', '屬性標籤', '客戶畫像表單的「屬性標籤」建議選項') + grp('roles', '學員角色', '場景「你的角色」與場景類型預設角色的選項');
+  } else {
+    body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">評分規則定義複盤報告的能力維度；場景的評估 Agent 從這裡選用。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="schema:">＋ 新增評分規則</button></div></div>
+      ${Object.keys(SCHEMAS).map(k => { const s = SCHEMAS[k]; const n = SCENARIOS.filter(x => (SCENARIO_META[x.id].eval || {}).schema === k).length; return `<div class="card" style="padding:16px 18px;margin-bottom:12px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><b>${esc(s.name)}</b><span class="mono" style="font-size:11px;color:var(--faint)">${esc(k)}</span>${s.veto ? '<span class="pill bad">法遵一票否決</span>' : ''}<span class="pill info">${n} 個場景使用</span>
+        <span style="margin-left:auto;white-space:nowrap"><button class="btn-ghost sm" data-act="paramopen" data-arg="schema:${k}">編輯</button> <button class="btn-ghost sm danger" data-act="paramdel" data-arg="schema:${k}" ${n ? 'disabled' : ''}>刪除</button></span></div>
+        <div class="chks" style="margin-bottom:8px">${s.dims.map((d, i) => `<span class="pill" style="color:var(--blue);background:#EDF3FB">${i + 1}. ${esc(d.cn)}${d.en ? ` <small style="opacity:.7">${esc(d.en)}</small>` : ''}</span>`).join('')}</div>
+        <div style="font-size:12.5px;color:var(--body)">${esc(s.desc || '')}</div></div>`; }).join('')}`;
+  }
+  return `<div class="wrap"><div class="page-h"><h1>參數設定</h1><p>難度選項、場景類型、人設選項與評分規則；場景與客戶畫像的表單直接讀取這裡的設定。</p></div><div class="tabs">${tabs}</div>${body}</div>${viewDlg()}`;
+}
+
 const OVERRIDE_KEY = 'sinopac-coach.scenarioOverrides';
 
 function loadScenarioOverrides() {
@@ -268,6 +380,23 @@ function persistCustomScenarios() {
   const list = SCENARIOS.filter(s => s.custom).map(s => ({ scenario: { ...s, icon: undefined }, meta: SCENARIO_META[s.id] }));
   lsSet(LS_CUSTOM_SCN, list);
 }
+const LS_DELETED_SCN = 'sinopac-coach.deletedScenarios';
+function openDeleteScenario(id) {
+  const sc = scenarioById(id); const meta = SCENARIO_META[id]; if (!sc) return;
+  const sessions = SESSIONS.filter(s => s.sc === id).length;
+  openDlg('scndel', { id, name: sc.cn, enabled: meta.status === 'on', sessions, personas: sc.personas.length, agents: ensureAgents(id).length, confirmName: '' });
+}
+function confirmDeleteScenario() {
+  const g = S.dlg; const d = g.draft; const sc = scenarioById(d.id); if (!sc) { S.dlg = null; render(); return; }
+  if (d.enabled) { g.error = '場景仍為「已啟用」，請先在編輯中改為未啟用再刪除'; render(); return; }
+  if (d.sessions) { g.error = `此場景已有 ${d.sessions} 筆對練記錄，為保留歷史資料不可刪除，請改為停用`; render(); return; }
+  if ((d.confirmName || '').trim() !== sc.cn) { g.error = '請輸入完整的場景名稱以確認刪除'; render(); return; }
+  const idx = SCENARIOS.findIndex(s => s.id === d.id); if (idx >= 0) SCENARIOS.splice(idx, 1); delete SCENARIO_META[d.id];
+  if (sc.custom) persistCustomScenarios(); else { const del = lsGet(LS_DELETED_SCN) || []; if (!del.includes(d.id)) del.push(d.id); lsSet(LS_DELETED_SCN, del); }
+  audit('刪除場景', `${sc.cn}（${d.id}）・客戶畫像 ${d.personas} 個、Agent ${d.agents} 組`, '場景設定');
+  S.dlg = null; if (S.route.name === 'scenario' && S.route.sc === d.id) { go('#/hub'); return; } render();
+}
+function applyDeletedScenarios() { const del = lsGet(LS_DELETED_SCN) || []; del.forEach(id => { const i = SCENARIOS.findIndex(s => s.id === id); if (i >= 0) SCENARIOS.splice(i, 1); delete SCENARIO_META[id]; }); }
 function personaInit(name) { const t = String(name || '').split('·').pop().trim(); return t ? t[0] : '客'; }
 
 function openEditScenario(id, addAgent) {
@@ -275,6 +404,7 @@ function openEditScenario(id, addAgent) {
     S.editScenario = { id: null, draft: {
       cn: '', en: '', desc: '', cat: 'credit', youRoleCn: '電銷專員', duration: '3–8′', diffs: DIFF_SETS.credit.join(','),
       ver: 'v1.0', owner: S.user ? S.user.name : '', status: 'off', personas: [], agents: [],
+      eval: { name: '', schema: Object.keys(SCHEMAS)[0] || '', workflow: '', timeoutSec: 60, pass: 'signal', passScore: 70, veto: false },
     } };
     render(); return;
   }
@@ -286,6 +416,7 @@ function openEditScenario(id, addAgent) {
     ver: meta.ver, owner: meta.owner, status: meta.status,
     personas: sc.personas.map(p => ({ ...p })),
     agents: ensureAgents(id).map(x => ({ ...x })),
+    eval: { ...ensureEval(id) },
   } };
   if (addAgent) agentAdd(false);
   render();
@@ -312,7 +443,8 @@ function saveEditScenario() {
   const first = agents.find(g => g.status === 'on') || agents[0];
   const scenarioPatch = { cn: d.cn.trim(), en: d.en.trim(), desc: d.desc.trim(), cat: d.cat, catCn: CAT_LABEL[d.cat] || '', duration: d.duration.trim(),
     diffs: diffs.length ? diffs : (DIFF_SETS[d.cat] || ['L2']), youRoleCn: d.youRoleCn.trim(), personas };
-  const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agents, agent: first ? first.name : '', embed: first ? first.embed : '' };
+  const ev = { name: String(d.eval.name || '').trim(), schema: SCHEMAS[d.eval.schema] ? d.eval.schema : Object.keys(SCHEMAS)[0], workflow: String(d.eval.workflow || '').trim(), timeoutSec: Math.max(5, Number(d.eval.timeoutSec) || 60), pass: d.eval.pass === 'score' ? 'score' : 'signal', passScore: Math.max(0, Math.min(100, Number(d.eval.passScore) || 70)), veto: !!d.eval.veto };
+  const metaPatch = { ver: d.ver.trim(), owner: d.owner.trim(), status: d.status, agents, agent: first ? first.name : '', embed: first ? first.embed : '', eval: ev };
   let sc, meta, isNew = false;
   if (e.id) { sc = scenarioById(e.id); meta = SCENARIO_META[e.id]; }
   else {
@@ -359,8 +491,8 @@ function viewEditScenarioModal() {
       <div class="form-grid agent-grid">
         <label class="field full-2"><span>名稱 <b>*</b></span><input data-field="personas.${i}.name" value="${esc(p.name || '')}" placeholder="例：複訪 A1 · 上班族拖延 李先生"></label>
         <label class="field"><span>預設難度</span><select data-field="personas.${i}.diff">${diffOpts.map(k => opt(k, p.diff, DIFF[k].cn)).join('')}</select></label>
-        <label class="field"><span>屬性標籤</span><input data-field="personas.${i}.risk" value="${esc(p.risk || '')}" placeholder="受薪階級 · 年收入 80 萬"></label>
-        <label class="field full-2"><span>情緒狀態</span><input data-field="personas.${i}.mood" value="${esc(p.mood || '')}" placeholder="客氣、反覆拖延"></label>
+        <label class="field"><span>屬性標籤</span><input data-field="personas.${i}.risk" list="dl-risks" value="${esc(p.risk || '')}" placeholder="受薪階級 · 年收入 80 萬"></label>
+        <label class="field full-2"><span>情緒狀態</span><input data-field="personas.${i}.mood" list="dl-moods" value="${esc(p.mood || '')}" placeholder="客氣、反覆拖延"></label>
         <label class="field full"><span>背景與能力缺口</span><textarea data-field="personas.${i}.temper" rows="2">${esc(p.temper || '')}</textarea></label>
       </div></div>`).join('');
   const agentRows = d.agents.map((g, i) => {
@@ -386,9 +518,9 @@ function viewEditScenarioModal() {
       <div class="form-grid">
         <label class="field"><span>場景名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}" placeholder="例：複訪"></label>
         <label class="field"><span>英文名稱</span><input data-field="en" value="${esc(d.en)}"></label>
-        <label class="field"><span>場景類型</span><select data-field="cat">${opt('credit', d.cat, '信貸電銷')}${opt('service', d.cat, '客服話務')}</select></label>
+        <label class="field"><span>場景類型</span><select data-field="cat">${Object.keys(CATS).map(k => opt(k, d.cat, CATS[k].short)).join('')}</select></label>
         <label class="field full"><span>說明</span><textarea data-field="desc" rows="2">${esc(d.desc)}</textarea></label>
-        <label class="field"><span>你的角色</span><input data-field="youRoleCn" value="${esc(d.youRoleCn)}"></label>
+        <label class="field"><span>你的角色</span><input data-field="youRoleCn" list="dl-roles" value="${esc(d.youRoleCn)}"></label>
         <label class="field"><span>預計時長</span><input data-field="duration" value="${esc(d.duration)}" placeholder="3–8′"></label>
         <label class="field"><span>狀態</span><select data-field="status">${opt('on', d.status, '已啟用')}${opt('off', d.status, '未啟用')}</select></label>
         <label class="field"><span>版本</span><input data-field="ver" value="${esc(d.ver)}"></label>
@@ -401,6 +533,18 @@ function viewEditScenarioModal() {
       <div class="agents-hd"><div><b>對練 Agent 配置</b><small>每組 Agent 對應一個「客戶畫像 × 難度」；學員選定後，對練中畫面載入對應的 iframe。</small></div>
         <button class="btn-ghost sm" data-act="agentadd">＋ 新增 Agent</button></div>
       ${agentRows || '<div class="card empty" style="padding:16px">尚未配置 Agent，按「新增 Agent」。</div>'}
+      <div class="agents-hd"><div><b>評估 Agent（評分 workflow）</b><small>對練結束後由此 Agent 依評分規則出分；逾時未回應會標記為暫無評分，可在對練記錄重新觸發。</small></div></div>
+      <div class="agent-row"><div class="form-grid agent-grid">
+        <label class="field full-2"><span>評估 Agent 名稱</span><input data-field="eval.name" value="${esc(d.eval.name)}" placeholder="altabots · 信貸評估 Agent"></label>
+        <label class="field"><span>評分規則</span><select data-field="eval.schema">${Object.keys(SCHEMAS).map(k => opt(k, d.eval.schema, SCHEMAS[k].name)).join('')}</select></label>
+        <label class="field full-2"><span>workflow／端點</span><input data-field="eval.workflow" class="mono" value="${esc(d.eval.workflow)}" placeholder="wf_credit_eval 或 https://…"></label>
+        <label class="field"><span>逾時（秒）</span><input data-field="eval.timeoutSec" type="number" min="5" value="${esc(String(d.eval.timeoutSec))}"></label>
+        <label class="field"><span>通關判定</span><select data-field="eval.pass">${opt('signal', d.eval.pass, '達成成交訊號')}${opt('score', d.eval.pass, '分數達門檻')}</select></label>
+        <label class="field"><span>分數門檻</span><input data-field="eval.passScore" type="number" min="0" max="100" value="${esc(String(d.eval.passScore))}" ${d.eval.pass === 'score' ? '' : 'disabled'}></label>
+        <label class="chk" style="gap:8px;align-self:end;padding-bottom:8px"><input type="checkbox" data-field="eval.veto" ${d.eval.veto ? 'checked' : ''}><span>法遵一票否決</span></label>
+        <div class="field full"><small>${SCHEMAS[d.eval.schema] ? `維度：${SCHEMAS[d.eval.schema].dims.map(x => x.cn).join('、')}` : '請先在參數設定建立評分規則'}</small></div>
+      </div></div>
+      ${personaDatalists()}
       <div class="form-ft"><button class="btn-ghost" data-act="cancelscn">取消</button><button class="btn-primary" data-act="savescn">${isNew ? '建立場景' : '儲存'}</button></div>
     </div></div>`;
 }
@@ -431,12 +575,49 @@ function findOrgNode(id, n = ORG, parent = null, depth = 0) {
 }
 function loadOrgOverrides() {
   const m = lsGet(LS.members); if (Array.isArray(m) && m.length) { MEMBERS.splice(0, MEMBERS.length, ...m); }
-  const r = lsGet(LS.roles); if (r) Object.keys(r).forEach(k => { if (ROLES[k]) { if (r[k].scope) ROLES[k].scope = r[k].scope; if (r[k].perms) Object.assign(ROLE_PERMS[k], r[k].perms); } });
+  const r = lsGet(LS.roles); if (r) Object.keys(r).forEach(k => {
+    if (!ROLES[k]) { if (!r[k].cn) return; ROLES[k] = { cn: r[k].cn, scope: r[k].scope || 'self', rank: r[k].rank || 1, custom: true }; ROLE_PERMS[k] = { insights: false, stats: false, scenarioSettings: false, settings: false }; }
+    if (r[k].cn) ROLES[k].cn = r[k].cn; if (r[k].scope) ROLES[k].scope = r[k].scope; if (r[k].perms) Object.assign(ROLE_PERMS[k], r[k].perms);
+  });
   const o = lsGet(LS.org); if (o && o.children) { Object.assign(ORG, o); rebuildUnits(); }
   const au = lsGet(LS.audit); if (Array.isArray(au) && au.length) AUDIT.unshift(...au);
 }
 function persistMembers() { lsSet(LS.members, MEMBERS); }
-function persistRoles() { const out = {}; Object.keys(ROLES).forEach(k => { out[k] = { scope: ROLES[k].scope, perms: ROLE_PERMS[k] }; }); lsSet(LS.roles, out); }
+function persistRoles() { const out = {}; Object.keys(ROLES).forEach(k => { out[k] = { cn: ROLES[k].cn, scope: ROLES[k].scope, rank: ROLES[k].rank, custom: !!ROLES[k].custom, perms: ROLE_PERMS[k] }; }); lsSet(LS.roles, out); }
+
+/* 角色類型：可新增、編輯、刪除（內建六種不可刪；系統擁有者不可改）；成員表單與 CSV 匯入的角色下拉同步讀取 ROLES */
+const SCOPE_LABEL = { all: '全行', team: '本人與下屬', self: '僅本人' };
+function openRole(code) {
+  const r = code ? ROLES[code] : null; const p = code ? ROLE_PERMS[code] : null;
+  openDlg('role', r ? { code, cn: r.cn, scope: r.scope, insights: !!p.insights, stats: !!p.stats, scenarioSettings: !!p.scenarioSettings, settings: !!p.settings, builtin: !r.custom }
+                    : { code: '', cn: '', scope: 'self', insights: false, stats: false, scenarioSettings: false, settings: false, builtin: false });
+}
+function saveRole() {
+  const d = S.dlg.draft; const errs = [];
+  if (!d.cn.trim()) errs.push('角色名稱必填');
+  const dup = Object.keys(ROLES).find(k => ROLES[k].cn === d.cn.trim() && k !== d.code); if (dup) errs.push('角色名稱已存在');
+  if (!d.code && !/^[A-Z][A-Z0-9_]{1,23}$/.test((d.newCode || '').trim().toUpperCase()) && (d.newCode || '').trim()) errs.push('角色代碼須為英文大寫、數字或底線');
+  if (errs.length) { S.dlg.error = errs.join('；'); render(); return; }
+  const perms = { insights: !!d.insights, stats: !!d.stats, scenarioSettings: !!d.scenarioSettings, settings: !!d.settings };
+  const rank = perms.settings ? 4 : perms.scenarioSettings ? 2 : 1;
+  if (d.code) {
+    if (d.code !== 'OWNER') { ROLES[d.code].cn = d.cn.trim(); ROLES[d.code].scope = d.scope; ROLES[d.code].rank = ROLES[d.code].custom ? rank : ROLES[d.code].rank; Object.assign(ROLE_PERMS[d.code], perms); }
+    audit('編輯角色', `${ROLES[d.code].cn}（${SCOPE_LABEL[ROLES[d.code].scope]}）`);
+  } else {
+    let code = (d.newCode || '').trim().toUpperCase() || ('ROLE_' + Date.now().toString(36).toUpperCase());
+    if (ROLES[code]) code += '_' + Math.random().toString(36).slice(2, 5).toUpperCase();
+    ROLES[code] = { cn: d.cn.trim(), scope: d.scope, rank, custom: true }; ROLE_PERMS[code] = perms;
+    audit('新增角色', `${d.cn.trim()}（${SCOPE_LABEL[d.scope]}）代碼 ${code}`);
+  }
+  persistRoles(); S.dlg = null; render();
+}
+function deleteRole(code) {
+  const r = ROLES[code]; if (!r) return;
+  if (!r.custom) { alert('內建角色不可刪除，可調整其權限'); return; }
+  const n = MEMBERS.filter(m => m.role === code).length; if (n) { alert(`仍有 ${n} 位成員使用此角色，請先調整成員角色`); return; }
+  if (!confirm(`刪除角色「${r.cn}」？`)) return;
+  delete ROLES[code]; delete ROLE_PERMS[code]; persistRoles(); audit('刪除角色', `${r.cn}（${code}）`); render();
+}
 function persistOrg() { lsSet(LS.org, ORG); rebuildUnits(); }
 function audit(act, detail, mod = '成員權限') {
   const now = new Date(); const pad = n => String(n).padStart(2, '0');
@@ -572,6 +753,10 @@ function deleteOrg(id) {
   hit.parent.children = hit.parent.children.filter(x => x.id !== id); persistOrg(); audit('刪除組織', `${hit.node.name}（${hit.node.code}）`); render();
 }
 
+function personaDatalists() {
+  const dl = (id, arr) => `<datalist id="${id}">${arr.map(v => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
+  return dl('dl-moods', PERSONA_OPTS.moods) + dl('dl-risks', PERSONA_OPTS.risks) + dl('dl-roles', PERSONA_OPTS.roles);
+}
 function viewDlg() {
   const g = S.dlg; if (!g) return '';
   const d = g.draft;
@@ -614,6 +799,61 @@ function viewDlg() {
       <div class="field full"><small>原型僅模擬結果，不實際呼叫；正式版由後端定時與 webhook 同步，停用、調單位、改角色在下次同步生效。</small></div>
     </div>`;
     foot = `<button class="btn-ghost" data-act="dlgcancel">${g.result ? '關閉' : '取消'}</button><button class="btn-primary" data-act="apisync">立即同步</button>`;
+  } else if (g.kind === 'scndel') {
+    const blocked = d.enabled || d.sessions > 0;
+    title = '刪除場景'; sub = `${d.name}　·　${d.id}`;
+    body = `<div class="del-box">
+      <div class="del-row"><span>狀態</span><b style="color:${d.enabled ? 'var(--red)' : '#1E9E63'}">${d.enabled ? '已啟用（須先停用）' : '未啟用'}</b></div>
+      <div class="del-row"><span>對練記錄</span><b style="color:${d.sessions ? 'var(--red)' : '#1E9E63'}">${d.sessions} 筆${d.sessions ? '（有記錄不可刪除）' : ''}</b></div>
+      <div class="del-row"><span>連帶刪除</span><b>客戶畫像 ${d.personas} 個、對練 Agent ${d.agents} 組、評估 Agent 設定</b></div>
+      ${blocked ? `<div class="form-err" style="margin:12px 0 0">${d.enabled ? '此場景仍在使用中。請先在「編輯」把狀態改為未啟用，確認學員已不再進入後再刪除。' : '此場景已有對練記錄。為保留學員的歷史成績與複盤報告，系統不允許刪除，請改為停用。'}</div>`
+        : `<div class="form-grid" style="margin-top:14px"><label class="field full"><span>請輸入場景名稱「${esc(d.name)}」以確認刪除 <b>*</b></span><input data-field="confirmName" value="${esc(d.confirmName || '')}" placeholder="${esc(d.name)}" autocomplete="off"></label></div>
+           <div style="font-size:12px;color:var(--muted);margin-top:8px">此操作無法復原，會寫入操作記錄。</div>`}
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button>${blocked ? '' : `<button class="btn-primary danger" data-act="scndelconfirm">確認刪除</button>`}`;
+  } else if (g.kind === 'diff') {
+    title = d.code ? '編輯難度' : '新增難度'; sub = d.code ? d.code : '新增後可在場景類型與場景的難度集合勾選';
+    body = `<div class="form-grid">
+      ${d.code ? `<div class="field"><span>代碼</span><input value="${esc(d.code)}" disabled class="mono"></div>` : `<label class="field"><span>代碼 <b>*</b></span><input data-field="newCode" value="${esc(d.newCode || '')}" class="mono" placeholder="L4"></label>`}
+      <label class="field"><span>名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}" placeholder="L4 極限"></label>
+      <label class="field"><span>英文</span><input data-field="en" value="${esc(d.en)}" placeholder="Extreme"></label>
+      <label class="field"><span>顏色</span><div style="display:flex;gap:8px;align-items:center"><input type="color" data-field="col" value="${esc(d.col)}" style="width:44px;padding:2px;height:36px"><span class="mono" style="font-size:12px">${esc(d.col)}</span></div></label>
+      <label class="field full-2"><span>說明</span><input data-field="desc" value="${esc(d.desc)}" placeholder="客戶行為與考驗重點"></label>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="paramsave">${d.code ? '儲存' : '建立'}</button>`;
+  } else if (g.kind === 'cat') {
+    const dl = d.diffs.split(',').filter(Boolean);
+    title = d.code ? '編輯場景類型' : '新增場景類型'; sub = d.code ? d.code : '新增後可在場景編輯的「場景類型」選擇';
+    body = `<div class="form-grid">
+      ${d.code ? `<div class="field"><span>代碼</span><input value="${esc(d.code)}" disabled class="mono"></div>` : `<label class="field"><span>代碼 <b>*</b></span><input data-field="newCode" value="${esc(d.newCode || '')}" class="mono" placeholder="wealth"></label>`}
+      <label class="field"><span>名稱 <b>*</b></span><input data-field="short" value="${esc(d.short)}" placeholder="理財顧問"></label>
+      <label class="field"><span>完整標籤</span><input data-field="label" value="${esc(d.label)}" placeholder="理財顧問 · Advisory"></label>
+      <label class="field full-2"><span>預設學員角色</span><input data-field="role" list="dl-roles" value="${esc(d.role)}"></label>
+      <div class="field full"><span>預設難度集合 <b>*</b></span><div class="chks">${Object.keys(DIFF).map(k => `<label class="chk"><input type="checkbox" data-field="diffs" value="${k}" ${dl.includes(k) ? 'checked' : ''}><span class="pill" style="color:${DIFF[k].col};background:${DIFF[k].col}1f">${esc(DIFF[k].cn)}</span></label>`).join('')}</div></div>
+    </div>${personaDatalists()}`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="paramsave">${d.code ? '儲存' : '建立'}</button>`;
+  } else if (g.kind === 'schema') {
+    title = d.code ? '編輯評分規則' : '新增評分規則'; sub = d.code ? d.code : '新增後可在場景的評估 Agent 選用';
+    body = `<div class="form-grid">
+      ${d.code ? `<div class="field"><span>代碼</span><input value="${esc(d.code)}" disabled class="mono"></div>` : `<label class="field"><span>代碼 <b>*</b></span><input data-field="newCode" value="${esc(d.newCode || '')}" class="mono" placeholder="wealth5"></label>`}
+      <label class="field full-2"><span>名稱 <b>*</b></span><input data-field="name" value="${esc(d.name)}" placeholder="理財五維"></label>
+      <label class="field full"><span>評分維度 <b>*</b></span><textarea data-field="dimsText" rows="5" placeholder="每行一個，例如：&#10;合規規範 / Compliance&#10;專業知識 / Expertise">${esc(d.dimsText)}</textarea><small>每行一個維度，可用「中文 / English」。</small></label>
+      <label class="chk full" style="gap:8px"><input type="checkbox" data-field="veto" ${d.veto ? 'checked' : ''}><span>法遵檢核表一票否決</span><small style="color:var(--muted)">任一項不符合即判定未通過</small></label>
+      <label class="field full"><span>說明</span><textarea data-field="desc" rows="2">${esc(d.desc)}</textarea></label>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="paramsave">${d.code ? '儲存' : '建立'}</button>`;
+  } else if (g.kind === 'role') {
+    const chk = (key, label, hint) => `<label class="chk" style="gap:8px"><input type="checkbox" data-field="${key}" ${d[key] ? 'checked' : ''}><span>${label}</span><small style="color:var(--muted)">${hint}</small></label>`;
+    title = d.code ? '編輯角色' : '新增角色'; sub = d.code ? `${d.code}${d.builtin ? '　·　內建角色，可改名稱與權限' : ''}` : '新增的角色會立即出現在成員表單的角色下拉選單';
+    body = `<div class="form-grid">
+      <label class="field full-2"><span>角色名稱 <b>*</b></span><input data-field="cn" value="${esc(d.cn)}" placeholder="例：電銷部長、資訊維護者"></label>
+      ${d.code ? `<div class="field"><span>角色代碼</span><input value="${esc(d.code)}" disabled class="mono"></div>` : `<label class="field"><span>角色代碼（選填）</span><input data-field="newCode" value="${esc(d.newCode || '')}" class="mono" placeholder="自動產生"></label>`}
+      <label class="field"><span>資料範圍</span><select data-field="scope">${opt('all', d.scope, '全行')}${opt('team', d.scope, '本人與下屬')}${opt('self', d.scope, '僅本人')}</select></label>
+      <div class="field full"><span>數據報表與系統設定</span><div class="chks" style="flex-direction:column;align-items:flex-start;gap:8px">
+        ${chk('insights', '洞察分析', '團隊洞察、人員排行')}${chk('stats', '對練統計', '場景內主管模組')}${chk('scenarioSettings', '場景設定', '維護場景、客戶畫像與 Agent')}${chk('settings', '系統設定（全部）', '含成員權限與操作記錄')}
+      </div><small>我的數據永遠可見，範圍依資料範圍；複盤報告的可見範圍同資料範圍。</small></div>
+    </div>`;
+    foot = `<button class="btn-ghost" data-act="dlgcancel">取消</button><button class="btn-primary" data-act="rolesave">${d.code ? '儲存' : '建立角色'}</button>`;
   } else if (g.kind === 'org') {
     const lvl = ['事業群', '處', '單位'][d.depth] || '單位';
     title = d.mode === 'add' ? `新增${lvl}` : `編輯${lvl}`; sub = d.mode === 'add' ? `上層：${d.parentName}` : (d.code || '');
@@ -698,13 +938,12 @@ function viewRecords(sc) {
       ? `<b class="mono" style="color:${scoreCol(r.score)};font-size:14px">${r.score}</b>
          <span class="pill" style="color:${scoreCol(r.score)};background:${scoreCol(r.score)}1f;margin-left:7px">${grade(r.score)}</span>`
       : r.status === 'evaluating'
-        ? '<span class="pill" style="color:#B5740F;background:#FBEFD9">正在評估中</span>'
-        : `<span class="pill" style="color:#667085;background:#F4F7F8">暫無評分</span> <button class="btn-ghost sm" data-act="rescore" data-arg="${r.id}" title="重新評分">↻</button>`;
+        ? `<button class="pill-btn" data-act="rescore" data-arg="${r.id}" title="若 workflow 未成功觸發，點擊重新觸發評分"><span class="spin" style="width:11px;height:11px;border-width:2px"></span>正在評估中 · 重新觸發</button>`
+        : `<span class="pill" style="color:#667085;background:#F4F7F8" title="${esc(r.failReason || '')}">暫無評分${r.failReason ? ' · 逾時' : ''}</span> <button class="btn-ghost sm" data-act="rescore" data-arg="${r.id}" title="${esc(r.failReason || '重新評分')}">↻ 重新評分</button>`;
     const mid = full
       ? `<td>${esc(m.name || '—')}</td><td>${esc(UNITS[m.unit] || '—')}</td>`
       : '';
-    return `<tr class="${r.status !== 'no_score' ? 'clickable' : ''}"
-        ${r.status !== 'no_score' ? `data-act="goto" data-arg="#/s/${sc.id}/report/${r.id}"` : ''}>
+    return `<tr class="clickable" data-act="goto" data-arg="#/s/${sc.id}/report/${r.id}">
       <td class="mono">${esc(r.date)}</td>
       <td><b>${esc(r.pe)}</b></td>
       <td><span class="pill" style="color:${d.col};background:${d.col}1f">${d.cn}</span></td>
@@ -875,7 +1114,7 @@ function viewReport(sc, sessionId) {
   if (!session) return `<div class="wrap"><div class="card empty">找不到這筆對練記錄。</div></div>`;
 
   const rc = reportFor(sc.id);
-  const evaluating = session.status === 'evaluating';
+  const evaluating = session.status === 'evaluating' || session.status === 'no_score';
   const overall = session.score == null ? 0 : session.score;
   const d = DIFF[session.diff] || DIFF.L2;
   const m = memberById(session.member) || S.user;
@@ -905,7 +1144,9 @@ function viewReport(sc, sessionId) {
       <button class="rp-voice ${rp.voice ? 'on' : ''}" data-act="replayvoice" title="${voiceOk ? '以瀏覽器語音朗讀逐字稿' : '此瀏覽器不支援語音朗讀'}" ${voiceOk ? '' : 'disabled'}>${svg(I.globe, 14)} ${rp.voice ? '朗讀中' : '靜音'}</button>
       <span class="rp-dot ${rp.playing ? 'on' : ''}"></span><span style="font-size:11.5px;color:var(--muted)">${rp.playing ? '回放中' : '錄音回放'}</span>
     </div>`;
-  const evalHero = evaluating ? `<div class="eval-box"><span class="spin"></span><div><b>評估 Agent 評分中…</b><div class="sub">依本場景的評分規則逐句分析，約需數秒；完成後本頁自動更新。</div></div></div>` : '';
+  const ev = ensureEval(sc.id); const schema = SCHEMAS[ev.schema];
+  const evalHero = evaluating ? `<div class="eval-box"><span class="spin"></span><div style="flex:1"><b>評估 Agent 評分中…</b><div class="sub">${esc(ev.name)}（${esc(schema ? schema.name : ev.schema)}）正依評分規則逐句分析，約需數秒；完成後本頁自動更新。</div></div><button class="btn-ghost sm" data-act="rescore" data-arg="${session.id}">重新觸發</button></div>`
+    : session.status === 'no_score' ? `<div class="eval-box fail"><span>⚠</span><div style="flex:1"><b>評分未完成</b><div class="sub">${esc(session.failReason || '評估 Agent 未回傳結果')}</div></div><button class="btn-primary" data-act="rescore" data-arg="${session.id}">重新觸發評分</button></div>` : '';
 
   return `<div class="wrap">
     <div class="card report-hero" style="margin-bottom:18px">
@@ -916,6 +1157,7 @@ function viewReport(sc, sessionId) {
           <span class="chip">客戶：${esc(session.pe)}</span>
           <span class="chip" style="color:${d.col};background:${d.col}1f;border-color:${d.col}33">${d.cn}難度</span>
           <span class="chip">理專：${esc(m.name)}</span>
+          <span class="chip" title="評估 Agent">評估：${esc(ev.name)}</span>
         </div>
         <div class="stats">
           <div><div class="v">${esc(session.dur)}</div><div class="l">對練時長</div></div>
@@ -937,7 +1179,7 @@ function viewReport(sc, sessionId) {
     ${evalHero}
 
     ${evaluating ? '' : `<div class="grid2" style="margin-bottom:18px;align-items:start">
-      <div class="card"><div class="card-h"><h2>能力維度評分</h2><div class="sub">COMPETENCY BREAKDOWN</div></div>
+      <div class="card"><div class="card-h"><h2>能力維度評分</h2><div class="sub">${esc(schema ? schema.name : 'COMPETENCY BREAKDOWN')}</div></div>
         <div class="card-b">${dims}</div></div>
       <div style="display:flex;flex-direction:column;gap:16px">
         <div class="list-good"><h3>${svg(I.check, 16)}表現亮點</h3><ul>${rc.strengths.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
@@ -1162,9 +1404,9 @@ function viewSysScenarios() {
               <span class="pill" style="color:${meta.status === 'on' ? '#1E9E63' : '#7C8992'};background:${meta.status === 'on' ? '#EAF8F2' : '#F4F7F8'}">${meta.status === 'on' ? '已啟用' : '未啟用'}</span>
             </div>
             <div style="font-size:12.5px;color:var(--body);margin-bottom:6px">${esc(s.desc)}</div>
-            <div style="font-size:11.5px;color:var(--muted)">可用畫面：對練記錄・對練・統計　｜　版本 ${esc(meta.ver)}　｜　維護人 ${esc(meta.owner)}　｜　客戶畫像 ${s.personas.length} 個　｜　Agent ${ensureAgents(s.id).length} 組（${ensureAgents(s.id).filter(g => g.status === 'on').length} 組啟用）</div>
+            <div style="font-size:11.5px;color:var(--muted)">可用畫面：對練記錄・對練・統計　｜　版本 ${esc(meta.ver)}　｜　維護人 ${esc(meta.owner)}　｜　客戶畫像 ${s.personas.length} 個　｜　Agent ${ensureAgents(s.id).length} 組（${ensureAgents(s.id).filter(g => g.status === 'on').length} 組啟用）　｜　評估：${esc(ensureEval(s.id).name)}（${esc((SCHEMAS[ensureEval(s.id).schema] || {}).name || ensureEval(s.id).schema)}）</div>
           </div>
-          <button class="btn-ghost" data-act="editscn" data-arg="${s.id}">編輯</button>
+          <div style="display:flex;gap:8px;flex-shrink:0"><button class="btn-ghost" data-act="editscn" data-arg="${s.id}">編輯</button><button class="btn-ghost danger" data-act="scndel" data-arg="${s.id}" title="${meta.status === 'on' ? '請先停用再刪除' : (sessionsAll(s.id) ? '已有對練記錄，不可刪除' : '刪除場景')}">刪除</button></div>
         </div>`;
       }).join('')
     : `<div class="card"><table class="tbl">
@@ -1183,7 +1425,7 @@ function viewSysScenarios() {
 
   return `<div class="wrap">
     <div class="page-h"><h1>場景設定</h1><p>維護工作場景與對練 Agent；啟用後會出現在左側「工作場景」與場景中心。</p></div>
-    <div class="tabs">${tabs}</div>${toolbar}${body}</div>${viewEditScenarioModal()}`;
+    <div class="tabs">${tabs}</div>${toolbar}${body}</div>${viewEditScenarioModal()}${viewDlg()}`;
 }
 
 function viewSysMembers() {
@@ -1216,18 +1458,20 @@ function viewSysMembers() {
       <div class="tbl-foot">共 ${MEMBERS.length} 位成員${q ? `，符合搜尋 ${rows.length} 位` : ''}　·　正式版成員與角色繼承自 altabots 工作空間，此頁的新增與匯入作為補登與批次校正。</div></div>`;
   } else if (S.memberTab === 'roles') {
     const chk = (k, key) => `<label class="chk"><input type="checkbox" data-roleperm="${k}:${key}" ${ROLE_PERMS[k][key] ? 'checked' : ''}></label>`;
-    body = `<div class="card"><table class="tbl roles">
-      <thead><tr><th>角色</th><th>資料範圍</th><th>我的數據</th><th>洞察分析</th><th>對練統計</th><th>場景設定</th><th>系統設定（全部）</th><th class="num">成員數</th></tr></thead>
+    body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">角色類型即成員表單與 CSV 匯入的「角色」下拉選單來源。</div><div style="margin-left:auto"><button class="btn-primary" data-act="roleopen" data-arg="">＋ 新增角色</button></div></div>
+      <div class="card"><table class="tbl roles">
+      <thead><tr><th>角色</th><th>資料範圍</th><th>我的數據</th><th>洞察分析</th><th>對練統計</th><th>場景設定</th><th>系統設定（全部）</th><th class="num">成員數</th><th class="num">操作</th></tr></thead>
       <tbody>${Object.keys(ROLES).map(k => {
         const r = ROLES[k]; const locked = k === 'OWNER';
-        return `<tr><td><b>${esc(r.cn)}</b> <span class="mono" style="color:var(--faint);font-size:11px">${k}</span></td>
+        return `<tr><td><b>${esc(r.cn)}</b> <span class="mono" style="color:var(--faint);font-size:11px">${k}</span>${r.custom ? ' <span class="pill info">自訂</span>' : ''}</td>
           <td><select class="sel-sm" data-roleperm="${k}:scope" ${locked ? 'disabled' : ''}>${['all', 'team', 'self'].map(v => `<option value="${v}" ${r.scope === v ? 'selected' : ''}>${{ all: '全行', team: '本人與下屬', self: '僅本人' }[v]}</option>`).join('')}</select></td>
           <td><span class="pill" style="color:#1E9E63;background:#EAF8F2">永遠可見（依資料範圍）</span></td>
           <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'insights')}</td>
           <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'stats')}</td>
           <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'scenarioSettings')}</td>
           <td>${locked ? '<span class="pill good">是</span>' : chk(k, 'settings')}</td>
-          <td class="num mono">${MEMBERS.filter(m => m.role === k).length}</td></tr>`;
+          <td class="num mono">${MEMBERS.filter(m => m.role === k).length}</td>
+          <td class="num" style="white-space:nowrap">${locked ? '<span class="pill" style="color:var(--faint);background:var(--soft)">固定</span>' : `<button class="btn-ghost sm" data-act="roleopen" data-arg="${k}">編輯</button>${r.custom ? ` <button class="btn-ghost sm danger" data-act="roledel" data-arg="${k}">刪除</button>` : ''}`}</td></tr>`;
       }).join('')}</tbody></table>
       <div class="tbl-foot">勾選即生效並保存。數據報表（我的數據、洞察分析、對練統計）與複盤報告的可見範圍都跟著此處的角色設定：資料範圍決定看得到誰的場次，洞察分析與對練統計決定能否進入主管模組。</div></div>`;
   } else {
@@ -1320,11 +1564,11 @@ function render() {
     crumb = viewCrumb([{ label: '場景中心', hash: '#/hub' }, { label: '洞察分析' }], { perm: true, back: '#/hub' });
     content = CAN.stats(S.user) ? viewInsights() : viewNoPerm();
   } else if (r.name === 'sys') {
-    const label = { scenarios: '場景設定', members: '成員權限', audit: '操作記錄' }[r.tab] || '場景設定';
+    const label = { scenarios: '場景設定', params: '參數設定', members: '成員權限', audit: '操作記錄' }[r.tab] || '場景設定';
     crumb = viewCrumb([{ label: '場景中心', hash: '#/hub' }, { label }], { perm: true, back: '#/hub' });
-    const allowed = r.tab === 'scenarios' ? CAN.scenarioSettings(S.user) : CAN.settings(S.user);
+    const allowed = (r.tab === 'scenarios' || r.tab === 'params') ? CAN.scenarioSettings(S.user) : CAN.settings(S.user);
     content = allowed
-      ? (r.tab === 'members' ? viewSysMembers() : r.tab === 'audit' ? viewSysAudit() : viewSysScenarios())
+      ? (r.tab === 'members' ? viewSysMembers() : r.tab === 'audit' ? viewSysAudit() : r.tab === 'params' ? viewSysParams() : viewSysScenarios())
       : viewNoPerm();
   }
 
@@ -1374,11 +1618,15 @@ const SCORING_DELAY_MS = 4000;
 function simulateScore(session) {
   // 以該場景的示範維度為基礎，依對話完成度與難度微調；同一場次重算結果相同
   const rc = reportFor(session.sc); const lines = transcriptFor(session.sc);
+  const ev = ensureEval(session.sc); const schema = ev && SCHEMAS[ev.schema];
+  const baseDims = schema && !(schema.dims.length === rc.dims.length && schema.dims.every((x, i) => x.cn === rc.dims[i].cn))
+    ? schema.dims.map((x, i) => ({ cn: x.cn, en: x.en, score: 78 + ((i * 7) % 11), note: `依評分規則「${schema.name}」第 ${i + 1} 項` }))
+    : rc.dims;
   const covered = Math.max(1, Math.min(lines.length, session.reveal || lines.length)) / lines.length;
   let seed = 0; for (const ch of session.id) seed = (seed * 31 + ch.charCodeAt(0)) % 9973;
   const jitter = (seed % 9) - 4;                                   // -4 … +4
   const diffAdj = { L1: 3, L2: 0, L3: -3, normal: 2, complaint: -2 }[session.diff] || 0;
-  const dims = rc.dims.map((d, i) => {
+  const dims = baseDims.map((d, i) => {
     const s = Math.round(d.score * (0.82 + 0.18 * covered) + jitter + diffAdj + ((seed >> i) % 3) - 1);
     return { cn: d.cn, en: d.en, score: Math.max(55, Math.min(98, s)), note: d.note };
   });
@@ -1390,6 +1638,14 @@ function simulateScore(session) {
 }
 function finishScoring(id) {
   const s = SESSIONS.find(x => x.id === id); if (!s || s.status !== 'evaluating') return;
+  // 模擬 workflow 未成功觸發：第一次嘗試且場次 id 符合條件時逾時，標記暫無評分，使用者可在對練記錄重新觸發
+  let seed = 0; for (const ch of s.id) seed = (seed * 31 + ch.charCodeAt(0)) % 97;
+  if (!s.attempts) s.attempts = 0; s.attempts++;
+  if (s.attempts === 1 && seed % 4 === 0) {
+    s.status = 'no_score'; s.failReason = `評估 Agent workflow（${ensureEval(s.sc).workflow || '未設定'}）未回應，已逾時`; persistSessions();
+    audit('評分逾時', `${s.id.slice(0, 8)} ${s.pe}・${s.failReason}`, '對練場景'); delete S.scoringTimers[id];
+    const r1 = S.route; if (r1.name === 'scenario' || r1.name === 'me' || r1.name === 'hub') render(); return;
+  }
   const r = simulateScore(s);
   Object.assign(s, { status: 'done', score: r.overall, dims: r.dims, compliance: r.compliance, words: r.words, scoredAt: Date.now() });
   persistSessions(); audit('完成對練', `${s.id.slice(0, 8)} ${scenarioById(s.sc) ? scenarioById(s.sc).cn : s.sc}・已評分（${s.score}）`, '對練場景');
@@ -1400,7 +1656,7 @@ function finishScoring(id) {
 function scheduleScoring(id) { clearTimeout(S.scoringTimers[id]); S.scoringTimers[id] = setTimeout(() => finishScoring(id), SCORING_DELAY_MS); }
 function rescoreSession(id) {
   const s = SESSIONS.find(x => x.id === id); if (!s) return;
-  s.status = 'evaluating'; s.score = null; persistSessions(); audit('重新評分', `${s.id.slice(0, 8)} ${s.pe}`, '對練場景'); scheduleScoring(id); render();
+  s.status = 'evaluating'; s.score = null; s.failReason = null; persistSessions(); audit('重新觸發評分', `${s.id.slice(0, 8)} ${s.pe}・${ensureEval(s.sc).workflow || ''}`, '對練場景'); scheduleScoring(id); render();
 }
 const LS_SESSIONS = 'sinopac-coach.sessions';
 function persistSessions() { lsSet(LS_SESSIONS, SESSIONS.filter(s => s.userMade)); }
@@ -1512,6 +1768,17 @@ const ACTIONS = {
   orgedit: id => openOrg('edit', id),
   orgdel: id => deleteOrg(id),
   orgsave: () => saveOrg(),
+  roleopen: code => openRole(code || null),
+  paramtab: t => { S.paramTab = t; render(); },
+  scndel: id => openDeleteScenario(id),
+  scndelconfirm: () => confirmDeleteScenario(),
+  paramopen: arg => { const [kind, code] = arg.split(':'); openParam(kind, code || null); },
+  paramsave: () => saveParam(),
+  paramdel: arg => { const [kind, code] = arg.split(':'); deleteParam(kind, code); },
+  poptadd: g => personaOptAdd(g),
+  poptdel: arg => personaOptDel(arg),
+  rolesave: () => saveRole(),
+  roledel: code => deleteRole(code),
   rescore: id => rescoreSession(id),
   replaytoggle: () => { const s = currentReportSession(); if (s) replayToggle(s); },
   replayseek: sec => { const s = currentReportSession(); if (s) replaySeek(s, Number(sec)); },
@@ -1526,6 +1793,7 @@ document.addEventListener('click', e => {
   const act = el.dataset.act;
   if (act === 'hubsearch' || act === 'recsearch' || act === 'globalsearch' || act === 'memsearch') return;
   if (act === 'replaybar') { const s = currentReportSession(); if (s) { const rect = el.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)); replaySeek(s, ratio * replayTotal(s, replayLines(s.sc))); } e.preventDefault(); return; }
+  if (act === 'noop') return;   // 對話框容器：只用來擋住背景的關閉，不可攔截勾選框等原生行為
   const fn = ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el.dataset.arg); }
 });
@@ -1533,7 +1801,9 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   const f = e.target.closest('[data-field]');
   if (f && S.dlg) {
-    const d = S.dlg.draft; const v = f.dataset.type === 'bool' ? f.value === 'true' : (f.type === 'checkbox' ? f.checked : f.value);
+    const d = S.dlg.draft;
+    if (f.dataset.field === 'diffs') { d.diffs = [...document.querySelectorAll('.modal [data-field="diffs"]')].filter(b => b.checked).map(b => b.value).join(','); return; }
+    const v = f.dataset.type === 'bool' ? f.value === 'true' : (f.type === 'checkbox' ? f.checked : f.value);
     d[f.dataset.field] = v; if (S.dlg.kind === 'csv' && f.dataset.field === 'text') d.rows = null;
     if (f.tagName === 'SELECT' && S.dlg.kind === 'member' && f.dataset.field === 'role') render();
     return;
@@ -1543,6 +1813,9 @@ document.addEventListener('input', e => {
     if (f.dataset.field.startsWith('agents.') || f.dataset.field.startsWith('personas.')) {
       const [list, idx, key] = f.dataset.field.split('.'); const g = d[list][Number(idx)]; if (g) { g[key] = f.value; if (f.tagName === 'SELECT') render(); }
       return;
+    }
+    if (f.dataset.field.startsWith('eval.')) {
+      const key = f.dataset.field.slice(5); d.eval[key] = f.type === 'checkbox' ? f.checked : f.value; if (f.tagName === 'SELECT') render(); return;
     }
     if (f.dataset.field === 'diffs') {
       const boxes = [...document.querySelectorAll('[data-field="diffs"]')];
@@ -1583,9 +1856,11 @@ window.addEventListener('hashchange', () => {
   if (c) c.scrollTop = 0;
 });
 
+loadParams();
 loadCustomScenarios();
+applyDeletedScenarios();
 loadScenarioOverrides();
-SCENARIOS.forEach(s => ensureAgents(s.id));
+SCENARIOS.forEach(s => { ensureAgents(s.id); ensureEval(s.id); });
 loadOrgOverrides();
 loadSessions();
 S.route = parseHash();

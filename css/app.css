@@ -481,3 +481,21 @@ table.tbl.roles .chk input { width: 16px; height: 16px; accent-color: var(--red)
 .agent-note .mono { font-size: 11.5px; color: var(--muted); }
 
 .agent-row-hd .av { width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+
+/* ---------------------------------------------------------------- 參數設定 / 評估 Agent */
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 6px; border: 1px solid rgba(0,0,0,.08); }
+.pill.opt { gap: 6px; padding-right: 6px; color: var(--ink2); background: var(--soft); border: 1px solid var(--line); }
+.pill.opt button { width: 16px; height: 16px; border-radius: 50%; color: var(--muted); font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.pill.opt button:hover { background: var(--red-soft); color: var(--red); }
+.inp-sm { border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font-size: 12.5px; background: var(--panel); color: var(--ink); min-width: 260px; outline: none; }
+.inp-sm:focus { border-color: var(--red); }
+.pill-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; border-radius: 7px; padding: 3px 9px; color: #B5740F; background: #FBEFD9; border: 1px solid #F0DBB0; cursor: pointer; white-space: nowrap; }
+.pill-btn:hover { background: #F7E3BC; }
+.eval-box.fail { background: var(--red-soft); border-color: #F0B0B4; color: #8A1C21; }
+.eval-box.fail .sub { color: #A8333A; }
+.eval-box .btn-ghost.sm, .eval-box .btn-primary { flex-shrink: 0; }
+
+.btn-ghost.danger { color: var(--red); border-color: #F0B0B4; }
+.btn-primary.danger { background: linear-gradient(145deg, #E5342B, #A50C16); }
+.del-box .del-row { display: flex; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line2); font-size: 13px; }
+.del-box .del-row span { width: 90px; color: var(--muted); flex-shrink: 0; }
