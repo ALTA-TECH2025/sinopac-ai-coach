@@ -43,6 +43,19 @@ const DIFF = {
 const scenarioById = id => SCENARIOS.find(s => s.id === id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+/* 對練中教練提示的四種類型；逐字稿每句客戶發言以 flag 標記類型（無 flag 視為話術建議） */
+const COACH_KIND = {
+  suggestion: { c: '#4F8EDC', l: '話術建議', en: 'Suggestion' },
+  compliance: { c: '#F2433A', l: '合規紅線', en: 'Compliance' },
+  risk:       { c: '#F0A34A', l: '情緒預警', en: 'Alert' },
+  win:        { c: '#36CDB2', l: '成交訊號', en: 'Closing' },
+};
+const COACH_GENERIC = {
+  suggestion: '先同理再回應：複述客戶的關鍵字，確認需求後再給方案。',
+  compliance: '注意法遵用語：不得保證核准、不得索取驗證碼或完整帳密，揭露費用與利率。',
+  risk: '客戶情緒升高：放慢語速、先安撫再處理，避免與客戶爭辯。',
+  win: '客戶釋出成交訊號：確認下一步、複述條件並約定時間，不再多推銷。',
+};
 /* 通過率目標與分級切分：參數設定 › 通過率目標 可調；場景 > 場景類型 > 全行 逐層覆寫 */
 const TARGETS = { passRate: 85, byCat: {}, byScenario: {}, grades: { excellent: 90, good: 80, pass: 70 } };
 const scoreCol = v => v >= TARGETS.grades.excellent ? '#1E9E63' : v >= TARGETS.grades.good ? '#2D6CC0' : v >= TARGETS.grades.pass ? '#E0882E' : '#D81E26';
@@ -900,7 +913,7 @@ function roleCanUseAgent(roleCode, a) { if (!a) return true; if (ROLE_BYPASS.inc
 function nowStr() { const d = new Date(); const pad = n => String(n).padStart(2, '0'); return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 /* 模擬 AltaBots 工作空間回傳的 App 清單：每個場景的對練 Agent（客戶畫像 × 難度）與評估 Agent 各一個 App，角色依場景類型映射（16.2） */
 function altabotsAppsSnapshot() {
-  const rolesFor = cat => cat === 'service' ? ['ADVISOR_JR', 'TRAINER', 'MANAGER'] : ['ADVISOR_JR', 'ADVISOR_SR', 'TRAINER', 'MANAGER'];
+  const rolesFor = () => ['ADVISOR_JR', 'ADVISOR_SR', 'TRAINER', 'MANAGER'];   // 示範：所有理專、培訓人員與主管皆可用；實際以工作空間群組為準
   const list = [];
   SCENARIOS.forEach(sc => {
     ensureAgents(sc.id).forEach((g, i) => { const src = embedSrc(g.embed); if (!src) return; const p = sc.personas.find(x => x.id === g.personaId);
@@ -1391,14 +1404,12 @@ function viewCall(sc) {
   const emoLabel = emo < 42 ? '抵觸 · 緊張' : emo < 66 ? '猶豫 · 中性' : '認可 · 積極';
   const emoCol = emo < 42 ? '#D81E26' : emo < 66 ? '#E0882E' : '#009E96';
 
-  let tipLine = null;
-  for (let i = vis.length - 1; i >= 0; i--) if (vis[i].tip) { tipLine = vis[i]; break; }
-  const FLAG = {
-    compliance: { c: '#D81E26', l: '合規紅線 · Compliance' },
-    risk:       { c: '#E0882E', l: '情緒預警 · Alert' },
-    win:        { c: '#009E96', l: '成交訊號 · Closing' },
-  };
-  const fk = (tipLine && tipLine.flag) ? FLAG[tipLine.flag] : { c: '#D81E26', l: '話術建議 · Suggestion' };
+  // 教練提示：永遠跟著「最新一句客戶發言」，分四種：話術建議／合規紅線／情緒預警／成交訊號
+  let custLine = null;
+  for (let i = vis.length - 1; i >= 0; i--) if (vis[i].who === 'cust') { custLine = vis[i]; break; }
+  const kind = custLine && COACH_KIND[custLine.flag] ? custLine.flag : 'suggestion';
+  const ck = COACH_KIND[kind];
+  const tipText = custLine ? (custLine.tip || COACH_GENERIC[kind]) : '等待客戶開口，提示會跟著客戶的每一句話更新。';
   const speaking = last.who;
 
   const body = vis.map(l => `<div class="call-line ${l.who}">${esc(l.t)}</div>`).join('');
@@ -1446,9 +1457,11 @@ function viewCall(sc) {
         </div>
       </div>
       <div class="call-right">
-        <div class="tip" style="border:1px solid ${fk.c}66">
-          <i style="background:${fk.c}"></i><b style="color:${fk.c}">${fk.l}</b>
-          <span>${esc(tipLine ? tipLine.tip : '對練進行中…')}</span>
+        <div class="coach" style="--ck:${ck.c}">
+          <div class="coach-hd"><b>教練提示</b><small>依最新一句客戶發言</small>
+            <div class="coach-kinds">${Object.keys(COACH_KIND).map(k => `<span class="${k === kind ? 'on' : ''}" style="--kc:${COACH_KIND[k].c}"><i></i>${COACH_KIND[k].l}</span>`).join('')}</div></div>
+          <div class="coach-body"><span class="coach-tag">${esc(ck.l)} · ${esc(ck.en)}</span><span class="coach-text">${esc(tipText)}</span></div>
+          ${custLine ? `<div class="coach-quote">客戶：「${esc(custLine.t.length > 42 ? custLine.t.slice(0, 42) + '…' : custLine.t)}」</div>` : ''}
         </div>
         <div class="call-lines" id="call-lines">${body}</div>
         <div style="display:flex;justify-content:center"><button class="speak-pill" data-act="noop">說話或打斷</button></div>
