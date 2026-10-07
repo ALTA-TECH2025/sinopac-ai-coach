@@ -17,7 +17,7 @@ const S = {
   collapsed: false,
   hubCat: 'all', hubSearch: '',
   personaId: null, difficulty: 'L2',
-  reveal: 0, elapsed: 0, confirmEnd: false, timer: null,
+  reveal: 0, elapsed: 0, confirmEnd: false, timer: null, callPhase: 'ready',   // 對練中：ready 未開始 / live 通話中 / ended 已結束
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
   range: { gran: '月', anchor: '', from: '', to: '' },   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
   liveSession: null,
@@ -43,19 +43,6 @@ const DIFF = {
 const scenarioById = id => SCENARIOS.find(s => s.id === id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-/* 對練中教練提示的四種類型；逐字稿每句客戶發言以 flag 標記類型（無 flag 視為話術建議） */
-const COACH_KIND = {
-  suggestion: { c: '#4F8EDC', l: '話術建議', en: 'Suggestion' },
-  compliance: { c: '#F2433A', l: '合規紅線', en: 'Compliance' },
-  risk:       { c: '#F0A34A', l: '情緒預警', en: 'Alert' },
-  win:        { c: '#36CDB2', l: '成交訊號', en: 'Closing' },
-};
-const COACH_GENERIC = {
-  suggestion: '先同理再回應：複述客戶的關鍵字，確認需求後再給方案。',
-  compliance: '注意法遵用語：不得保證核准、不得索取驗證碼或完整帳密，揭露費用與利率。',
-  risk: '客戶情緒升高：放慢語速、先安撫再處理，避免與客戶爭辯。',
-  win: '客戶釋出成交訊號：確認下一步、複述條件並約定時間，不再多推銷。',
-};
 /* 通過率目標與分級切分：參數設定 › 通過率目標 可調；場景 > 場景類型 > 全行 逐層覆寫 */
 const TARGETS = { passRate: 85, byCat: {}, byScenario: {}, grades: { excellent: 90, good: 80, pass: 70 } };
 const scoreCol = v => v >= TARGETS.grades.excellent ? '#1E9E63' : v >= TARGETS.grades.good ? '#2D6CC0' : v >= TARGETS.grades.pass ? '#E0882E' : '#D81E26';
@@ -140,6 +127,7 @@ function minutesText(min) { return min >= 60 ? `${(min / 60).toFixed(1)}h` : `${
 /* ------------------------------------------------------------------ icons */
 const I = {
   menu:  '<path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  phone: '<path d="M6.6 10.8a15 15 0 006.6 6.6l2.2-2.2a1 1 0 011-.25 11.4 11.4 0 003.6.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.4 11.4 0 00.57 3.6 1 1 0 01-.25 1l-2.2 2.2z" fill="currentColor"/>',
   hub:   '<path d="M3 3h7.5v7.5H3zM13.5 3H21v7.5h-7.5zM3 13.5h7.5V21H3zM13.5 13.5H21V21h-7.5z" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/>',
   chart: '<path d="M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6M20 16v-2" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
   cog:   '<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M19.4 13a7.9 7.9 0 000-2l2-1.5-2-3.4-2.4 1a7.6 7.6 0 00-1.7-1L15 3H9l-.3 2.6a7.6 7.6 0 00-1.7 1l-2.4-1-2 3.4L4.6 11a7.9 7.9 0 000 2l-2 1.5 2 3.4 2.4-1a7.6 7.6 0 001.7 1L9 21h6l.3-2.6a7.6 7.6 0 001.7-1l2.4 1 2-3.4z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
@@ -1397,82 +1385,56 @@ function viewNew(sc) {
 /* ------------------------------------------------------------------ 場景：對練中 */
 function viewCall(sc) {
   const p = curPersona(sc);
-  const lines = transcriptFor(sc.id);
-  const vis = lines.slice(0, S.reveal);
-  const last = vis[vis.length - 1] || lines[0];
-  const emo = last.emo;
-  const emoLabel = emo < 42 ? '抵觸 · 緊張' : emo < 66 ? '猶豫 · 中性' : '認可 · 積極';
-  const emoCol = emo < 42 ? '#D81E26' : emo < 66 ? '#E0882E' : '#009E96';
-
-  // 教練提示：永遠跟著「最新一句客戶發言」，分四種：話術建議／合規紅線／情緒預警／成交訊號
-  let custLine = null;
-  for (let i = vis.length - 1; i >= 0; i--) if (vis[i].who === 'cust') { custLine = vis[i]; break; }
-  const kind = custLine && COACH_KIND[custLine.flag] ? custLine.flag : 'suggestion';
-  const ck = COACH_KIND[kind];
-  const tipText = custLine ? (custLine.tip || COACH_GENERIC[kind]) : '等待客戶開口，提示會跟著客戶的每一句話更新。';
-  const speaking = last.who;
-
-  const body = vis.map(l => `<div class="call-line ${l.who}">${esc(l.t)}</div>`).join('');
   const sd = DIFF[S.difficulty];
+  const g = agentFor(sc.id, p.id, S.difficulty);
+  const agentName = (g && g.name) || '永豐對練 Agent';
+  const src = g ? embedSrc(g.embed) : '';
+  const phase = S.callPhase || 'ready';
+  const shortP = p.name.split('·').pop().trim();
+  const statusCn = { ready: '未開始', live: '通話中', ended: '已結束' }[phase];
 
   const modal = S.confirmEnd ? `<div class="modal-bg">
     <div class="modal">
       <div class="ic" style="color:var(--red)">${svg(I.warn, 22)}</div>
-      <h3>結束本次對練？</h3>
-      <p>結束後將生成對練記錄並開始評分。</p>
+      <h3>${phase === 'ended' ? '通話已結束，送出評分？' : '結束本次對練？'}</h3>
+      <p>${phase === 'ended' ? 'Agent 已回傳逐字稿與錄音。送出後建立對練記錄並由評估 Agent 評分。' : '結束後將通知 Agent 結束通話，生成對練記錄並開始評分。'}</p>
       <div class="row">
-        <button class="btn-ghost" data-act="cancelend" style="justify-content:center">繼續對練</button>
+        <button class="btn-ghost" data-act="cancelend" style="justify-content:center">${phase === 'ended' ? '稍後再送' : '繼續對練'}</button>
         <button data-act="doend" style="background:linear-gradient(145deg,#E5342B,#C00E1A);color:#fff">結束對練並評分</button>
       </div>
     </div></div>` : '';
+
+  // 模擬 AltaBots 對練 Agent 的 iframe 通話頁：頭像、Agent 名稱、場景／人設副標、開始語音通話；通話中顯示狀態與結束通話
+  const frameBody = phase === 'ready'
+    ? `<button class="cf-call" data-act="iframecall">${svg(I.phone, 16)}開始語音通話</button>`
+    : phase === 'live'
+      ? `<div class="cf-wave"><i></i><i></i><i></i><i></i><i></i></div><div class="cf-status">通話中 · ${fmt(S.elapsed)}</div><button class="cf-hang" data-act="iframehang">${svg(I.phone, 16)}結束通話</button>`
+      : `<div class="cf-status">通話已結束 · ${fmt(S.elapsed)}</div><small class="cf-hint">逐字稿與錄音已回傳本系統，請按右上「結束對練並評分」。</small>`;
 
   return `<div class="call">
     <div class="call-top">
       <div class="l">
         <button class="call-back" data-act="askend">${svg(I.back, 16)}返回</button>
-        <span class="rec"><i></i><b>REC</b></span>
-        <span style="font-size:12.5px;color:#9FC4BD">${esc(sc.cn)}</span>
+        <span class="call-status ${phase}"><i></i>${statusCn}</span>
+        <span style="font-size:12.5px;color:#9FC4BD">${esc(sc.cn)} · ${esc(shortP)}</span>
       </div>
       <div class="call-timer">${fmt(S.elapsed)}</div>
-      <div class="r"><span style="font-size:12px;color:#7FA59E">難度 <b style="color:#EAF2F1">${sd.cn}</b></span></div>
+      <div class="r"><span style="font-size:12px;color:#7FA59E">難度 <b style="color:#EAF2F1">${sd.cn}</b></span>
+        <button class="call-end-btn" data-act="askend">結束對練並評分</button></div>
     </div>
-    <div class="call-body">
-      <div class="call-rail">
-        <div style="display:flex;flex-direction:column;align-items:center">
-          <div class="avatar-wrap">
-            ${speaking === 'cust' ? '<span class="avatar-ring"></span><span class="avatar-ring b"></span>' : ''}
-            <div class="avatar-disc"><div style="background:${p.col}">${esc(p.init)}</div></div>
-            <div class="avatar-tag">${esc(p.name.split('·').pop().trim())}</div>
+    <div class="call-frame-wrap">
+      <div class="call-frame" title="${esc(src || '尚未配置 Agent，以示範畫面進行')}">
+        <div class="cf-chrome"><span class="cf-dot"></span><span class="cf-dot"></span><span class="cf-dot"></span><span class="cf-src mono">${esc(src || 'altabots · 示範通話頁')}</span><span class="cf-badge">iframe</span></div>
+        <div class="cf-body ${phase}">
+          <div class="cf-avatar">${phase === 'live' ? '<span class="avatar-ring"></span><span class="avatar-ring b"></span>' : ''}
+            <div class="cf-face"><svg width="60" height="60" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="24" r="12" fill="#F2D3B8"/><path d="M20 20c0-8 24-8 24 0v4c0 1-1 2-2 2H22c-1 0-2-1-2-2v-4z" fill="#2B2B2B"/><rect x="21" y="23" width="9" height="7" rx="3.5" stroke="#2B2B2B" stroke-width="1.6"/><rect x="34" y="23" width="9" height="7" rx="3.5" stroke="#2B2B2B" stroke-width="1.6"/><path d="M30 26.5h4" stroke="#2B2B2B" stroke-width="1.6"/><path d="M12 56c0-11 9-18 20-18s20 7 20 18v4H12v-4z" fill="#2F4A8A"/><path d="M26 36l6 6 6-6" stroke="#fff" stroke-width="1.6"/></svg></div>
           </div>
-          <div class="emo"><i style="background:${emoCol}"></i>客戶情緒 · ${emoLabel}</div>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:center">
-          <div class="avatar-wrap">
-            ${speaking === 'agent' ? '<span class="avatar-ring"></span><span class="avatar-ring b"></span>' : ''}
-            <div class="avatar-disc"><div style="background:radial-gradient(circle at 50% 38%,#0F1C1E,#04090A)">
-              <svg width="54" height="54" viewBox="0 0 48 48" fill="none"><path d="M14 10h20a6 6 0 016 6v9a6 6 0 01-6 6H22l-8 6.5V31a6 6 0 01-6-6v-9a6 6 0 016-6z" stroke="#4DA3FF" stroke-width="2.4" stroke-linejoin="round"/></svg>
-            </div></div>
-            <div class="avatar-tag">你 · ${esc(S.user.name)}</div>
-          </div>
+          <b class="cf-name">${esc(agentName)}</b>
+          <small class="cf-sub">${esc(sc.cn)}-${esc(shortP)}（ASR+LLM+TTS）</small>
+          ${frameBody}
         </div>
       </div>
-      <div class="call-right">
-        <div class="coach" style="--ck:${ck.c}">
-          <div class="coach-hd"><b>教練提示</b><small>依最新一句客戶發言</small>
-            <div class="coach-kinds">${Object.keys(COACH_KIND).map(k => `<span class="${k === kind ? 'on' : ''}" style="--kc:${COACH_KIND[k].c}"><i></i>${COACH_KIND[k].l}</span>`).join('')}</div></div>
-          <div class="coach-body"><span class="coach-tag">${esc(ck.l)} · ${esc(ck.en)}</span><span class="coach-text">${esc(tipText)}</span></div>
-          ${custLine ? `<div class="coach-quote">客戶：「${esc(custLine.t.length > 42 ? custLine.t.slice(0, 42) + '…' : custLine.t)}」</div>` : ''}
-        </div>
-        <div class="call-lines" id="call-lines">${body}</div>
-        <div style="display:flex;justify-content:center"><button class="speak-pill" data-act="noop">說話或打斷</button></div>
-        <div class="call-ctl">
-          <button class="ctl" data-act="noop">${svg(I.globe, 21)}</button>
-          <button class="ctl end" data-act="askend">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff" style="transform:rotate(135deg)"><path d="M6.62 10.79a15 15 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24 11.4 11.4 0 003.58.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.4 11.4 0 00.57 3.58 1 1 0 01-.25 1.02z"/></svg>
-          </button>
-          <button class="ctl" data-act="noop">${svg(I.doc, 21)}</button>
-        </div>
-      </div>
+      <div class="call-note">通話介面由 AltaBots 對練 Agent 以 iframe 提供，本系統只提供外框（計時、狀態、結束對練並評分）。逐字稿與錄音於通話結束後由 Agent 回傳，供複盤報告的記錄詳情與回放使用。</div>
     </div>
     ${modal}
   </div>`;
@@ -2041,7 +2003,7 @@ function startCall() {
   const sc = scenarioById(S.route.sc);
   const p = curPersona(sc);
   clearInterval(S.timer);
-  S.reveal = 1; S.elapsed = 0; S.confirmEnd = false;
+  S.reveal = 0; S.elapsed = 0; S.confirmEnd = false; S.callPhase = 'ready';
   const now = new Date(); const pad = n => String(n).padStart(2, '0');
   S.liveSession = {
     id: Date.now().toString(16).slice(-10) + Math.random().toString(16).slice(2, 8), sc: sc.id, pe: p.name,
@@ -2050,7 +2012,13 @@ function startCall() {
   };
   audit('發起對練', `${S.liveSession.id.slice(0, 8)} ${sc.cn}・${p.name}`, '對練場景');
   go(`#/s/${sc.id}/call`);
+}
+/* iframe 內按「開始語音通話」：外框開始計時；逐字稿由 Agent 端產生（原型每 3 秒推進一句，通話中不顯示），結束後回傳供複盤 */
+function iframeCallStart() {
+  if (S.callPhase === 'live') return;
+  const sc = scenarioById(S.route.sc); if (!sc) return;
   const lines = transcriptFor(sc.id);
+  S.callPhase = 'live'; S.reveal = Math.max(1, S.reveal); clearInterval(S.timer);
   let tick = 0;
   S.timer = setInterval(() => {
     tick++; S.elapsed++;
@@ -2058,6 +2026,12 @@ function startCall() {
     if (S.route.name === 'scenario' && S.route.tab === 'call') render();
     else clearInterval(S.timer);
   }, 1000);
+  render();
+}
+/* iframe 內按「結束通話」：Agent 回傳 ended 事件，外框停止計時並詢問是否送出評分 */
+function iframeCallEnd() {
+  if (S.callPhase !== 'live') return;
+  clearInterval(S.timer); S.callPhase = 'ended'; S.confirmEnd = true; render();
 }
 
 /* ---- 對練場次：結束 → 評分中 → 完成（模擬評估 Agent，約 4 秒回傳） ---- */
@@ -2122,8 +2096,8 @@ function endCall() {
   const live = S.liveSession;
   S.confirmEnd = false;
   if (!live) { go(`#/s/${sc.id}/records`); return; }
-  const m = Math.floor(S.elapsed / 60), s = S.elapsed % 60;
-  Object.assign(live, { dur: `${m}′${String(s).padStart(2, '0')}″`, durationSec: S.elapsed, reveal: S.reveal, status: 'evaluating', live: false, userMade: true });
+  const m = Math.floor(S.elapsed / 60), s = S.elapsed % 60; S.callPhase = 'ready';
+  Object.assign(live, { dur: `${m}′${String(s).padStart(2, '0')}″`, durationSec: S.elapsed, reveal: Math.max(1, S.reveal), status: 'evaluating', live: false, userMade: true });
   if (!SESSIONS.some(x => x.id === live.id)) SESSIONS.unshift(live);
   persistSessions(); scheduleScoring(live.id);
   S.liveSession = null;
@@ -2191,6 +2165,7 @@ const ACTIONS = {
   navtoggle: () => { S.navOpen = !S.navOpen; render(); }, navclose: () => { S.navOpen = false; render(); },
   rangegran: g => { setRangeGran(g); render(); }, rangeprev: () => { rangeShift(-1); render(); }, rangenext: () => { rangeShift(1); render(); }, rangetoday: () => { S.range.anchor = dKey(new Date()); render(); },
   askend: () => { S.confirmEnd = true; render(); },
+  iframecall: () => iframeCallStart(), iframehang: () => iframeCallEnd(),
   cancelend: () => { S.confirmEnd = false; render(); },
   doend: () => endCall(),
   settab: t => { S.settingsTab = t; render(); },
