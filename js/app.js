@@ -3,11 +3,12 @@
 // 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
-import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js';
+import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261007.911a2a5';
 import { ROLES, ORG, UNITS, MEMBERS, DEMO_ACCOUNTS, memberById, visibleMemberIds,
-         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js';
+         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261007.911a2a5';
 
 const VERSION = 'v1.0.4';
+const BUILD = '20261007.911a2a5';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
 const AT = [0, 22, 54, 82, 108, 132, 180, 208, 216, 248, 300, 336];
 
 /* ------------------------------------------------------------------ state */
@@ -263,7 +264,7 @@ function viewSidebar() {
       ${sysGroup}
     </div>
     <div class="side-foot">
-      <div class="side-ver">SinoPac AI Coach ${VERSION} · PoC</div>
+      <div class="side-ver" title="build ${BUILD}">SinoPac AI Coach ${VERSION} · PoC · build ${BUILD}</div>
       <button class="side-collapse" data-act="collapse">
         ${svg(S.collapsed ? I.right : I.left, 17)}<span class="lbl">收合側欄</span>
       </button>
