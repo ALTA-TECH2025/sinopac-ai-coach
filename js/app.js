@@ -3,12 +3,12 @@
 // 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
-import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.e50fbe2';
+import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.e802178';
 import { ROLES, ORG, UNITS, MEMBERS, DEMO_ACCOUNTS, memberById, visibleMemberIds,
-         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.e50fbe2';
+         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.e802178';
 
 const VERSION = 'v1.0.4';
-const BUILD = '20261008.e50fbe2';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
+const BUILD = '20261008.e802178';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
 const AT = [0, 22, 54, 82, 108, 132, 180, 208, 216, 248, 300, 336];
 
 /* ------------------------------------------------------------------ state */
@@ -21,7 +21,8 @@ const S = {
   reveal: 0, elapsed: 0, confirmEnd: false, timer: null, callPhase: 'ready',   // 對練中：ready 未開始 / live 通話中 / ended 已結束
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
   range: { gran: '月', anchor: '', from: '', to: '' },
-  gq: '', gOpen: false,   // 頂欄全域搜尋   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
+  gq: '', gOpen: false,   // 頂欄全域搜尋
+  drawer: null,            // 洞察抽屜：{ member, sessionId }   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
   liveSession: null,
   editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
   dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
@@ -46,9 +47,19 @@ const scenarioById = id => SCENARIOS.find(s => s.id === id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 /* 通過率目標與分級切分：參數設定 › 通過率目標 可調；場景 > 場景類型 > 全行 逐層覆寫 */
-const TARGETS = { passRate: 85, byCat: {}, byScenario: {}, grades: { excellent: 90, good: 80, pass: 70 } };
-const scoreCol = v => v >= TARGETS.grades.excellent ? '#1E9E63' : v >= TARGETS.grades.good ? '#2D6CC0' : v >= TARGETS.grades.pass ? '#E0882E' : '#D81E26';
-const grade = v => v >= TARGETS.grades.excellent ? '優秀' : v >= TARGETS.grades.good ? '良好' : v >= TARGETS.grades.pass ? '合格' : '待提升';
+const DEFAULT_LEVELS = [
+  { key: 'excellent', cn: '優秀', en: 'Excellent', min: 90, col: '#1E9E63' },
+  { key: 'good',      cn: '良好', en: 'Good',      min: 80, col: '#2D6CC0' },
+  { key: 'pass',      cn: '合格', en: 'Pass',      min: 70, col: '#E0882E' },
+  { key: 'low',       cn: '待提升', en: 'Needs Work', min: 0, col: '#D81E26' },
+];
+const TARGETS = { passRate: 85, byCat: {}, byScenario: {}, grades: { excellent: 90, good: 80, pass: 70 }, levels: DEFAULT_LEVELS.map(l => ({ ...l })) };
+/* 分級：名稱、下限、顏色皆由參數設定維護；分數所有顯示處（記錄、報告、分布、排行）都從這裡取色與取名 */
+function levelOf(v) { const ls = TARGETS.levels; for (const l of ls) if (v >= l.min) return l; return ls[ls.length - 1]; }
+const scoreCol = v => levelOf(Number(v) || 0).col;
+const grade = v => levelOf(Number(v) || 0).cn;
+function syncGradesFromLevels() { const L = TARGETS.levels; TARGETS.grades = { excellent: L[0].min, good: L[1].min, pass: L[2].min }; }
+function levelRangeText(i) { const L = TARGETS.levels; const l = L[i]; return i === 0 ? `${l.min} 分以上` : i === L.length - 1 ? `${L[i - 1].min} 分以下` : `${l.min}–${L[i - 1].min - 1} 分`; }
 function targetFor(scId) {
   const sc = SCENARIOS.find(x => x.id === scId);
   if (scId && TARGETS.byScenario[scId] != null) return Number(TARGETS.byScenario[scId]);
@@ -195,14 +206,14 @@ function viewGate() {
   return `<div class="gate">
     <div class="gate-brand">
       <img src="assets/logo.png" alt="永豐銀行">
-      <span><b>永豐AI對練</b><span>AI 金牌理專模擬對練</span></span>
+      <span><b>永豐 AI 語音對練系統</b><span>AI 金牌理專模擬對練</span></span>
     </div>
     <div class="gate-card">
       <h1>選擇身分進入</h1>
       <p>原型以角色決定導覽與資料範圍：系統管理員看全行、單位主管看本人與下屬、理專只看自己。本原型不驗證帳號密碼。</p>
       ${rows}
     </div>
-    <div class="gate-note">永豐AI對練 ${VERSION} · PoC　｜　內容為展示用假資料</div>
+    <div class="gate-note">永豐 AI 語音對練系統 ${VERSION} · PoC　｜　內容為展示用假資料</div>
   </div>`;
 }
 
@@ -233,8 +244,8 @@ function viewSidebar() {
         `<button class="nav-item on" data-act="goto" data-arg="#/s/${s.id}/records">${svg(I.doc, 18, 'ico')}<span class="lbl">${esc(s.cn)}</span></button>`;
       work += `<div class="nav-sub">
         ${subItem(`#/s/${s.id}/records`, '對練記錄', r.tab === 'records' || r.tab === 'report')}
-        ${subItem(`#/s/${s.id}/new`, '對練', r.tab === 'new' || r.tab === 'call')}
-        ${CAN.stats(S.user) ? subItem(`#/s/${s.id}/stats`, '統計', r.tab === 'stats') : ''}
+        ${subItem(`#/s/${s.id}/new`, '發起對練', r.tab === 'new' || r.tab === 'call')}
+        ${CAN.stats(S.user) ? subItem(`#/s/${s.id}/stats`, '對練統計', r.tab === 'stats') : ''}
       </div>`;
     }
   }
@@ -256,7 +267,7 @@ function viewSidebar() {
         : '');
 
   return `<aside class="side">
-    <div class="side-brand"><img src="assets/logo.png" alt=""><b>永豐AI對練</b></div>
+    <div class="side-brand"><img src="assets/logo.png" alt=""><b>永豐 AI 語音對練系統</b></div>
     <div class="side-scroll">
       ${navItem('#/hub', I.hub, '場景中心', { on: r.name === 'hub' })}
       <div class="nav-group">工作場景</div>
@@ -271,6 +282,53 @@ function viewSidebar() {
       </button>
     </div>
   </aside>`;
+}
+
+/* 洞察抽屜：主管在對練統計／洞察分析點成員 → 右側抽屜看個人 KPI 與對練記錄，並可直接在抽屜內閱讀複盤報告與回放 */
+function openDrawer(memberId) {
+  if (!CAN.stats(S.user)) return; const m = memberById(memberId); if (!m || !visibleMemberIds(S.user).includes(m.id)) return;
+  replayStop(false); S.drawer = { member: m.id, sessionId: null }; render();
+}
+function closeDrawer() { if (!S.drawer) return; replayStop(false); S.drawer = null; render(); }
+function drawerOpenSession(id) { if (!S.drawer) return; replayStop(false); S.drawer.sessionId = id; render(); const el = document.querySelector('.drawer-body'); if (el) el.scrollTop = 0; }
+function drawerBack() { if (!S.drawer) return; replayStop(false); S.drawer.sessionId = null; render(); }
+function viewDrawer() {
+  const d = S.drawer; if (!d) return ''; const m = memberById(d.member); if (!m) return '';
+  const rb = rangeBounds(); const all = SESSIONS.filter(r => r.member === m.id); const rows = all.filter(inRange).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const done = rows.filter(r => r.status === 'done'); const avg = done.length ? done.reduce((a, b) => a + b.score, 0) / done.length : 0; const pr = passRate(rows); const minutes = rows.reduce((n, r) => n + sessionMinutes(r), 0);
+  let body;
+  if (d.sessionId) {
+    const sess = SESSIONS.find(x => x.id === d.sessionId); const sc = sess && scenarioById(sess.sc);
+    body = `<div class="drawer-sub"><button class="btn-ghost sm" data-act="drawback">${svg(I.back, 14)}返回 ${esc(m.name)} 的對練記錄</button><span class="mono" style="font-size:11px;color:var(--faint)">${esc(d.sessionId)}</span></div>
+      <div class="drawer-report">${sc && sess ? viewReport(sc, sess.id) : '<div class="card empty">找不到這筆對練記錄。</div>'}</div>`;
+  } else {
+    const scRows = SCENARIOS.filter(s => rows.some(r => r.sc === s.id)).map(s => { const p = passRate(rows.filter(r => r.sc === s.id)); const t = targetFor(s.id); return `<tr><td><b>${esc(s.cn)}</b></td><td class="num mono">${p.n}</td><td class="num"><b class="mono" style="color:${prCol(p, t)}">${passRateText(p)}</b></td><td class="num mono" style="color:var(--muted)">${t}%</td></tr>`; }).join('');
+    const list = rows.map(r => { const sc = scenarioById(r.sc) || {}; const df = DIFF[r.diff]; const ps = sessionPass(r);
+      return `<button class="dr-sess" data-act="drawsess" data-arg="${r.id}">
+        <span class="dr-date mono">${esc(String(r.date).slice(0, 10))}</span>
+        <span class="dr-main"><b>${esc(sc.cn || r.sc)}</b><small>${esc(r.pe)}</small></span>
+        ${df ? `<span class="pill" style="color:${df.col};background:${df.col}1f">${esc(df.cn)}</span>` : ''}
+        <span class="dr-score">${r.status === 'done' ? `<b class="mono" style="color:${scoreCol(r.score)}">${r.score}</b><span class="pill ${ps.pass ? 'good' : 'bad'}">${ps.pass ? '通過' : '未通過'}</span>` : r.status === 'evaluating' ? '<span class="pill info">評分中</span>' : '<span class="pill" style="color:#667085;background:#F4F7F8">暫無評分</span>'}</span>
+        ${svg(I.arrow, 14)}</button>`; }).join('');
+    body = `<div class="kpis dr-kpis">
+        ${kpi('練', '對練場次', rows.length, rb.text, '#D81E26')}
+        ${kpi('分', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#E0882E')}
+        ${kpi('過', '通過率', passRateText(pr), passRateSub(pr, TARGETS.passRate), prCol(pr, TARGETS.passRate))}
+        ${kpi('時', '練習時長', minutes ? minutesText(minutes) : '—', rows.length ? `平均每場 ${minutesText(minutes / rows.length)}` : '此區間沒有對練', '#009E96')}
+      </div>
+      ${scRows ? `<div class="card" style="margin-bottom:14px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">${esc(rb.text)}</div></div><table class="tbl" style="margin-top:10px"><thead><tr><th>場景</th><th class="num">次數</th><th class="num">通過率</th><th class="num">目標</th></tr></thead><tbody>${scRows}</tbody></table></div>` : ''}
+      <div class="card"><div class="card-h"><h2>對練記錄</h2><div class="sub">${esc(rb.text)}・點任一筆在抽屜內閱讀複盤報告與回放</div></div>
+        <div class="dr-list">${list || `<div class="empty">${all.length ? '此區間沒有對練記錄，試試切換區間。' : '尚無對練記錄。'}</div>`}</div></div>`;
+  }
+  return `<div class="drawer-bg" data-act="drawclose"></div>
+    <aside class="drawer" role="dialog" aria-label="洞察抽屜">
+      <div class="drawer-hd">
+        <span class="av" style="background:${m.col}">${esc(m.name[0])}</span>
+        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b><small>${esc(ROLES[m.role] ? ROLES[m.role].cn : m.role)} · ${esc(UNITS[m.unit] || '')} · 累計 ${all.length} 場</small></div>
+        <button class="x" data-act="drawclose" aria-label="關閉">${svg(I.back, 16)}</button>
+      </div>
+      <div class="drawer-body">${body}</div>
+    </aside>`;
 }
 
 /* 全域搜尋：場景、客戶畫像、對練記錄（依權限範圍）、成員與設定頁 */
@@ -316,7 +374,7 @@ function viewTopbar() {
   const u = S.user;
   return `<div class="topbar">
     <button class="icon-btn nav-btn" data-act="navtoggle" aria-label="選單">${svg(I.menu, 20)}</button>
-    <div class="brand-m"><img src="assets/logo.png" alt=""><b>永豐AI對練</b></div>
+    <div class="brand-m"><img src="assets/logo.png" alt=""><b>永豐 AI 語音對練系統</b></div>
     <button class="org-pick" data-act="noop">
       <span>永豐商業銀行</span><span class="sep">/</span><span>${esc(UNITS[u.unit] || '總行')}</span>${svg(I.chev, 15)}
     </button>
@@ -383,21 +441,32 @@ function loadParams() {
   if (p.cats) { Object.keys(CATS).forEach(k => delete CATS[k]); Object.assign(CATS, p.cats); syncCatDerived(); }
   if (p.personaOpts) Object.assign(PERSONA_OPTS, p.personaOpts);
   if (p.schemas) { Object.keys(SCHEMAS).forEach(k => delete SCHEMAS[k]); Object.assign(SCHEMAS, p.schemas); }
-  if (p.targets) { Object.assign(TARGETS, p.targets); TARGETS.grades = { ...{ excellent: 90, good: 80, pass: 70 }, ...(p.targets.grades || {}) }; TARGETS.byCat = p.targets.byCat || {}; TARGETS.byScenario = p.targets.byScenario || {}; }
+  if (p.targets) {
+    Object.assign(TARGETS, p.targets); TARGETS.byCat = p.targets.byCat || {}; TARGETS.byScenario = p.targets.byScenario || {};
+    if (Array.isArray(p.targets.levels) && p.targets.levels.length === 4) TARGETS.levels = p.targets.levels.map((l, i) => ({ ...DEFAULT_LEVELS[i], ...l }));
+    else { const g = { excellent: 90, good: 80, pass: 70, ...(p.targets.grades || {}) }; TARGETS.levels = DEFAULT_LEVELS.map(l => ({ ...l })); TARGETS.levels[0].min = g.excellent; TARGETS.levels[1].min = g.good; TARGETS.levels[2].min = g.pass; }
+    syncGradesFromLevels();
+  }
 }
 function saveTargets() {
   const num = sel => { const el = document.querySelector(sel); if (!el) return null; const v = el.value.trim(); return v === '' ? null : Number(v); };
   const errs = []; const inRange = v => v != null && Number.isFinite(v) && v >= 0 && v <= 100;
   const g = num('[data-target="passRate"]'); if (!inRange(g)) errs.push('全行通過率目標須為 0–100');
-  const ge = num('[data-target="g.excellent"]'), gg = num('[data-target="g.good"]'), gp = num('[data-target="g.pass"]');
-  if (![ge, gg, gp].every(inRange)) errs.push('分級切分須為 0–100'); else if (!(ge > gg && gg > gp)) errs.push('分級切分須遞減：優秀 > 良好 > 合格');
+  const levels = TARGETS.levels.map((l, i) => {
+    const nameEl = document.querySelector(`[data-target="lv.${i}.cn"]`), colEl = document.querySelector(`[data-target="lv.${i}.col"]`);
+    const cn = nameEl ? nameEl.value.trim() : l.cn; const col = colEl ? colEl.value.trim() : l.col; const min = i === TARGETS.levels.length - 1 ? 0 : num(`[data-target="lv.${i}.min"]`);
+    return { ...l, cn, col, min };
+  });
+  levels.forEach((l, i) => { if (!l.cn) errs.push(`第 ${i + 1} 級名稱必填`); if (!/^#[0-9A-Fa-f]{6}$/.test(l.col)) errs.push(`「${l.cn || i + 1}」顏色須為 #RRGGBB`); if (i < levels.length - 1 && !inRange(l.min)) errs.push(`「${l.cn || i + 1}」下限須為 0–100`); });
+  for (let i = 1; i < levels.length; i++) if (inRange(levels[i].min) && inRange(levels[i - 1].min) && !(levels[i - 1].min > levels[i].min)) errs.push(`分級下限須遞減：${levels[i - 1].cn} > ${levels[i].cn}`);
+  const names = new Set(levels.map(l => l.cn)); if (names.size !== levels.length) errs.push('分級名稱不可重複');
   const byCat = {}, bySc = {};
   document.querySelectorAll('[data-target^="cat."]').forEach(el => { const v = el.value.trim(); if (v === '') return; const n = Number(v); if (!inRange(n)) errs.push(`場景類型「${CATS[el.dataset.target.slice(4)] ? CATS[el.dataset.target.slice(4)].short : el.dataset.target}」目標須為 0–100`); else byCat[el.dataset.target.slice(4)] = n; });
   document.querySelectorAll('[data-target^="sc."]').forEach(el => { const v = el.value.trim(); if (v === '') return; const n = Number(v); const sc = scenarioById(el.dataset.target.slice(3)); if (!inRange(n)) errs.push(`場景「${sc ? sc.cn : el.dataset.target}」目標須為 0–100`); else bySc[el.dataset.target.slice(3)] = n; });
   if (errs.length) { S.targetMsg = { err: errs.join('；') }; render(); return; }
-  TARGETS.passRate = g; TARGETS.grades = { excellent: ge, good: gg, pass: gp }; TARGETS.byCat = byCat; TARGETS.byScenario = bySc;
-  persistParams(); audit('更新通過率目標', `全行 ${g}%・類型覆寫 ${Object.keys(byCat).length}・場景覆寫 ${Object.keys(bySc).length}・分級 ${ge}/${gg}/${gp}`, '參數設定');
-  S.targetMsg = { ok: '已儲存，所有通過率卡片與分級即時套用。' }; render();
+  TARGETS.passRate = g; TARGETS.levels = levels; syncGradesFromLevels(); TARGETS.byCat = byCat; TARGETS.byScenario = bySc;
+  persistParams(); audit('更新通過率與分級', `全行 ${g}%・類型覆寫 ${Object.keys(byCat).length}・場景覆寫 ${Object.keys(bySc).length}・分級 ${levels.map(l => `${l.cn}≥${l.min}`).join('/')}`, '參數設定');
+  S.targetMsg = { ok: '已儲存，所有分數、分級標籤、顏色與通過率卡片即時套用。' }; render();
 }
 /* 評估 Agent（評分 workflow）依場景配置 */
 function ensureEval(id) {
@@ -459,7 +528,7 @@ function personaOptDel(arg) { const [group, idx] = arg.split(':'); const v = PER
 
 function viewSysParams() {
   const tab = S.paramTab || 'diff';
-  const tabs = [['diff', '難度選項'], ['cat', '場景類型'], ['persona', '人設選項'], ['schema', '評分規則'], ['target', '通過率目標']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="paramtab" data-arg="${k}">${l}</button>`).join('');
+  const tabs = [['diff', '難度選項'], ['cat', '場景類型'], ['persona', '人設選項'], ['schema', '評分規則'], ['target', '通過率與分級']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="paramtab" data-arg="${k}">${l}</button>`).join('');
   let body = '';
   if (tab === 'diff') {
     body = `<div class="filters" style="margin-bottom:14px"><div style="font-size:12.5px;color:var(--muted)">這裡維護全行可用的難度選項；每個場景類型再從中挑選自己的難度集合（如信貸電銷 L1–L3、客服話務 一般／客訴），場景與 Agent 只能用所屬類型的難度。</div><div style="margin-left:auto"><button class="btn-primary" data-act="paramopen" data-arg="diff:">＋ 新增難度</button></div></div>
@@ -479,7 +548,7 @@ function viewSysParams() {
       <div style="display:flex;gap:8px"><input id="popt-${key}" class="inp-sm" placeholder="輸入新選項後按新增"><button class="btn-ghost sm" data-act="poptadd" data-arg="${key}">新增</button></div></div>`;
     body = grp('moods', '情緒狀態', '客戶畫像表單的「情緒狀態」建議選項') + grp('risks', '屬性標籤', '客戶畫像表單的「屬性標籤」建議選項') + grp('roles', '學員角色', '場景「你的角色」與場景類型預設角色的選項');
   } else if (tab === 'target') {
-    const msg = S.targetMsg || {}; const g = TARGETS.grades;
+    const msg = S.targetMsg || {};
     const numIn = (key, val, ph) => `<input type="number" min="0" max="100" class="inp-sm" style="width:92px" data-target="${key}" value="${val == null ? '' : esc(String(val))}" placeholder="${esc(ph || '')}">`;
     const catRows = Object.keys(CATS).map(k => `<tr><td><b>${esc(CATS[k].short)}</b> <span class="mono" style="font-size:11px;color:var(--faint)">${esc(k)}</span></td><td class="mono">${esc(String(TARGETS.passRate))}%</td><td>${numIn('cat.' + k, TARGETS.byCat[k], '沿用全行')}</td><td class="mono">${SCENARIOS.filter(s => s.cat === k).length}</td></tr>`).join('');
     const scRows = SCENARIOS.map(s => { const inherit = TARGETS.byCat[s.cat] != null ? TARGETS.byCat[s.cat] : TARGETS.passRate; const ev = ensureEval(s.id); return `<tr><td><b>${esc(s.cn)}</b> <span style="color:var(--muted);font-size:12px">${esc(CATS[s.cat] ? CATS[s.cat].short : s.cat)}</span></td><td style="font-size:12px;color:var(--body)">${ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'}${ev.veto ? '・法遵否決' : ''}</td><td class="mono">${esc(String(inherit))}%</td><td>${numIn('sc.' + s.id, TARGETS.byScenario[s.id], '沿用類型')}</td><td class="mono">${(() => { const pr = passRate(SESSIONS.filter(x => x.sc === s.id)); return pr.pct == null ? '—' : `${pr.pct}%（${pr.k}／${pr.n}）`; })()}</td></tr>`; }).join('');
@@ -487,8 +556,16 @@ function viewSysParams() {
       ${msg.err ? `<div class="form-err" style="margin-bottom:12px">${esc(msg.err)}</div>` : ''}${msg.ok ? `<div class="form-ok" style="margin-bottom:12px">${esc(msg.ok)}</div>` : ''}
       <div class="grid2" style="margin-bottom:14px;align-items:start">
         <div class="card" style="padding:16px 18px"><b>全行通過率目標</b><small style="display:block;color:var(--muted);margin:4px 0 10px">我的數據、洞察分析與未覆寫的場景類型／場景使用此值</small><div style="display:flex;align-items:center;gap:8px">${numIn('passRate', TARGETS.passRate)}<span>%</span></div></div>
-        <div class="card" style="padding:16px 18px"><b>得分分級切分</b><small style="display:block;color:var(--muted);margin:4px 0 10px">複盤報告、對練記錄與洞察分析的分級標籤；低於「合格」為待提升</small>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center"><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">優秀 ≥ ${numIn('g.excellent', g.excellent)}</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">良好 ≥ ${numIn('g.good', g.good)}</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px">合格 ≥ ${numIn('g.pass', g.pass)}</label></div></div>
+        <div class="card" style="padding:16px 18px"><b>得分分級、標籤與顏色</b><small style="display:block;color:var(--muted);margin:4px 0 10px">分數所有顯示處（對練記錄、複盤報告、洞察分析分布與排行、我的數據）都依此表取標籤與顏色；最後一級下限固定為 0</small>
+          <table class="tbl lv-tbl"><thead><tr><th>等級</th><th>下限（≥）</th><th>區間</th><th>顏色</th><th>預覽</th></tr></thead><tbody>
+          ${TARGETS.levels.map((l, i) => { const last = i === TARGETS.levels.length - 1; const sample = last ? Math.max(0, TARGETS.levels[i - 1].min - 5) : Math.min(100, l.min + 2); return `<tr>
+            <td><input class="inp-sm" style="width:88px" data-target="lv.${i}.cn" value="${esc(l.cn)}"></td>
+            <td>${last ? '<span class="mono" style="color:var(--faint)">0</span>' : numIn('lv.' + i + '.min', l.min)}</td>
+            <td class="mono" style="font-size:12px;color:var(--muted)">${esc(levelRangeText(i))}</td>
+            <td><span style="display:inline-flex;align-items:center;gap:6px"><input type="color" data-target="lv.${i}.col" value="${esc(l.col)}" style="width:34px;height:28px;padding:1px;border:1px solid var(--line);border-radius:6px;background:var(--panel)"><span class="mono" style="font-size:11px">${esc(l.col)}</span></span></td>
+            <td><b class="mono" style="color:${l.col}">${sample}</b> <span class="pill" style="color:${l.col};background:${l.col}1f">${esc(l.cn)}</span></td></tr>`; }).join('')}
+          </tbody></table>
+          <small style="display:block;color:var(--muted);margin-top:10px;line-height:1.6">分級只描述分數表現；是否「通過」另依各場景評估 Agent 的通關判定（分數門檻、成交訊號、法遵否決），兩者可能不同，例如 74 分為「${esc(grade(74))}」但未達成成交訊號則顯示「未通過」。</small></div>
       </div>
       <div class="card" style="margin-bottom:14px"><div class="card-h"><h2>依場景類型覆寫</h2><div class="sub">空白沿用全行</div></div><table class="tbl" style="margin-top:10px"><thead><tr><th>場景類型</th><th>沿用值</th><th>覆寫目標（%）</th><th>場景數</th></tr></thead><tbody>${catRows}</tbody></table></div>
       <div class="card"><div class="card-h"><h2>依場景覆寫</h2><div class="sub">空白沿用場景類型；通關判定在場景設定 › 編輯 › 評估 Agent</div></div><table class="tbl" style="margin-top:10px"><thead><tr><th>場景</th><th>單場通關判定</th><th>沿用值</th><th>覆寫目標（%）</th><th>目前通過率（全部記錄）</th></tr></thead><tbody>${scRows}</tbody></table></div>`;
@@ -1572,7 +1649,7 @@ function viewReport(sc, sessionId) {
       <div class="card-b" id="replay-lines">${lines}</div>
       ${replayCtl}</div>
 
-    <div style="display:flex;gap:10px;margin-top:18px">
+    <div class="report-ft" style="display:flex;gap:10px;margin-top:18px">
       <button class="btn-ghost" data-act="goto" data-arg="#/s/${sc.id}/records">返回對練記錄</button>
       <button class="btn-primary" data-act="goto" data-arg="#/s/${sc.id}/new">${svg(I.play, 16)}再次對練</button>
     </div>
@@ -1596,12 +1673,17 @@ function viewScenarioStats(sc) {
     `<div class="bar-row"><div class="lb"><span>${esc(k)}</span><span>${v}</span></div>
      <div class="bar-track"><div class="bar-fill" style="width:${v / maxP * 100}%;background:linear-gradient(90deg,#EE6A60,#D81E26)"></div></div></div>`).join('');
 
-  const byMember = {}; const byMemberRows = {};
-  rows.forEach(r => { const n = (memberById(r.member) || {}).name || '—'; byMember[n] = (byMember[n] || 0) + 1; (byMemberRows[n] = byMemberRows[n] || []).push(r); });
-  const maxM = Math.max(1, ...Object.values(byMember)); const tgt = targetFor(sc.id);
-  const memberBars = Object.entries(byMember).map(([k, v]) =>
-    `<div class="bar-row"><div class="lb"><span>${esc(k)}</span><span>${v} 次・<b style="color:${prCol(passRate(byMemberRows[k]), tgt)}">通過 ${passRateText(passRate(byMemberRows[k]))}</b></span></div>
-     <div class="bar-track"><div class="bar-fill" style="width:${v / maxM * 100}%;background:linear-gradient(90deg,#3CC0B4,#009E96)"></div></div></div>`).join('');
+  const tgt = targetFor(sc.id);
+  const byMember = {}; rows.forEach(r => { (byMember[r.member] = byMember[r.member] || []).push(r); });
+  const board = Object.entries(byMember).map(([id, list]) => { const m = memberById(id); const dn = list.filter(r => r.status === 'done'); const avg = dn.length ? dn.reduce((a, b) => a + b.score, 0) / dn.length : 0; return { m, id, n: list.length, avg, pr: passRate(list) }; })
+    .filter(x => x.m).sort((a, b) => b.avg - a.avg).map((x, i) => `<tr class="clickable" data-act="drawopen" data-arg="${x.id}" title="開啟洞察抽屜">
+      <td class="mono" style="color:var(--muted)">${i + 1}</td>
+      <td><b>${esc(x.m.name)}</b>${x.m.id === S.user.id ? ' <span class="pill" style="color:var(--red);background:var(--red-soft)">我</span>' : ''}</td>
+      <td class="nowrap">${esc(UNITS[x.m.unit] || '—')}</td><td class="nowrap">${esc(ROLES[x.m.role] ? ROLES[x.m.role].cn : x.m.role)}</td>
+      <td class="num mono">${x.n}</td>
+      <td class="num"><b class="mono" style="color:${x.pr.pct == null ? 'var(--faint)' : prCol(x.pr, tgt)}">${passRateText(x.pr)}</b></td>
+      <td class="num"><b class="mono" style="color:${x.avg ? scoreCol(x.avg) : 'var(--faint)'}">${x.avg ? x.avg.toFixed(1) : '—'}</b></td>
+      <td>${x.avg ? `<span class="pill" style="color:${scoreCol(x.avg)};background:${scoreCol(x.avg)}1f">${esc(grade(x.avg))}</span>` : '<span style="color:var(--faint)">—</span>'}</td></tr>`).join('');
 
   const recent = rows.slice(0, 6).map(r => {
     const m = memberById(r.member) || {};
@@ -1620,9 +1702,10 @@ function viewScenarioStats(sc) {
       ${(() => { const pr = passRate(rows); const t = targetFor(sc.id); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, t), prCol(pr, t)); })()}
       ${kpi('人', '參與人數', new Set(rows.map(r => r.member)).size, '有對練記錄', '#2D6CC0')}
     </div>
-    <div class="grid2 dash-row" style="margin-bottom:18px">
+    <div class="grid-me dash-row" style="margin-bottom:18px">
+      <div class="card"><div class="card-h"><h2>成員排名</h2><div class="sub">${esc(rb.text)}・依平均分排序・點成員開啟洞察抽屜</div></div>
+        ${board ? `<table class="tbl" style="margin-top:12px"><thead><tr><th>#</th><th>姓名</th><th>所屬單位</th><th>角色</th><th class="num">對練次數</th><th class="num">通過率</th><th class="num">平均分</th><th>分級</th></tr></thead><tbody>${board}</tbody></table>` : '<div class="card-b"><div class="empty">尚無資料</div></div>'}</div>
       <div class="card"><div class="card-h"><h2>客戶畫像與難度分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${personaBars || '<div class="empty">尚無資料</div>'}${diffBars ? `<div class="sub-h">難度</div>${diffBars}` : ''}</div></div>
-      <div class="card"><div class="card-h"><h2>理專分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${memberBars || '<div class="empty">尚無資料</div>'}</div></div>
     </div>
     <div class="card"><div class="card-h"><h2>最近對練</h2><div class="sub">${esc(rb.text)} 內的對練場次</div></div>
       ${rows.length ? `<table class="tbl" style="margin-top:12px"><thead><tr><th>對練編號</th><th>客戶畫像</th><th>理專</th><th>發起日期</th><th class="num">得分</th></tr></thead><tbody>${recent}</tbody></table>` : '<div class="empty">尚無資料</div>'}
@@ -1741,9 +1824,7 @@ function viewInsights() {
         <div class="bar-track"><div class="bar-fill" style="width:${s ? s : 0}%;background:linear-gradient(90deg,${scoreCol(s)}99,${scoreCol(s)})"></div></div></div>`;
     }).join('');
 
-  const G = TARGETS.grades;
-  const buckets = [[`優秀（${G.excellent} 分以上）`, '#1E9E63', r => r.score >= G.excellent], [`良好（${G.good}–${G.excellent - 1} 分）`, '#2D6CC0', r => r.score >= G.good && r.score < G.excellent],
-                   [`合格（${G.pass}–${G.good - 1} 分）`, '#E0882E', r => r.score >= G.pass && r.score < G.good], [`待提升（${G.pass} 分以下）`, '#D81E26', r => r.score < G.pass]];
+  const buckets = TARGETS.levels.map((l, i) => [`${l.cn}（${levelRangeText(i)}）`, l.col, r => levelOf(r.score) === l]);
   const total = done.length || 1;
   const distRows = buckets.map(([l, c, f]) => {
     const n = done.filter(f).length;
@@ -1756,7 +1837,7 @@ function viewInsights() {
     const mine = rows.filter(r => r.member === m.id && r.status === 'done');
     const s = mine.length ? mine.reduce((a, b) => a + b.score, 0) / mine.length : 0;
     return { m, n: rows.filter(r => r.member === m.id).length, s, pr: passRate(rows.filter(r => r.member === m.id)) };
-  }).sort((a, b) => b.s - a.s).map((x, i) => `<tr>
+  }).sort((a, b) => b.s - a.s).map((x, i) => `<tr class="clickable" data-act="drawopen" data-arg="${x.m.id}" title="開啟洞察抽屜">
       <td class="mono" style="color:var(--muted)">${i + 1}</td>
       <td><b>${esc(x.m.name)}</b>${x.m.id === S.user.id ? ' <span class="pill" style="color:var(--red);background:var(--red-soft)">我</span>' : ''}</td>
       <td>${esc(UNITS[x.m.unit])}</td><td>${esc(ROLES[x.m.role].cn)}</td>
@@ -2034,7 +2115,7 @@ function render() {
   root.innerHTML = `<div class="shell ${S.collapsed ? 'collapsed' : ''} ${S.navOpen ? 'nav-open' : ''}">
     ${viewSidebar()}<div class="nav-bg" data-act="navclose"></div>
     <div class="main">${viewTopbar()}${crumb}<div class="content">${pcNote}${content}</div></div>
-  </div>`;
+  </div>${viewDrawer()}`;
 
   if (focusId) {
     const el = root.querySelector(`[data-keep-focus="${focusId}"]`);
@@ -2201,7 +2282,7 @@ function replaySeek(session, sec) {
   render();
 }
 
-function currentReportSession() { const r = S.route; if (r.name !== 'scenario' || r.tab !== 'report') return null; return SESSIONS.find(s => s.id === r.arg) || null; }
+function currentReportSession() { if (S.drawer && S.drawer.sessionId) return SESSIONS.find(s => s.id === S.drawer.sessionId) || null; const r = S.route; if (r.name !== 'scenario' || r.tab !== 'report') return null; return SESSIONS.find(s => s.id === r.arg) || null; }
 
 const ACTIONS = {
   login: id => { S.user = memberById(id); go('#/hub'); render(); },
@@ -2213,6 +2294,7 @@ const ACTIONS = {
   pickdiff: k => { S.difficulty = k; render(); },
   startcall: () => startCall(),
   navtoggle: () => { S.navOpen = !S.navOpen; render(); }, navclose: () => { S.navOpen = false; render(); },
+  drawopen: id => openDrawer(id), drawclose: () => closeDrawer(), drawsess: id => drawerOpenSession(id), drawback: () => drawerBack(),
   gsgo: i => gsGo(i), gsclear: () => { S.gq = ''; S.gOpen = false; render(); const el = document.querySelector('[data-keep-focus="globalsearch"]'); if (el) el.focus(); },
   rangegran: g => { setRangeGran(g); render(); }, rangeprev: () => { rangeShift(-1); render(); }, rangenext: () => { rangeShift(1); render(); }, rangetoday: () => { S.range.anchor = dKey(new Date()); render(); },
   askend: () => { S.confirmEnd = true; render(); },
@@ -2342,11 +2424,12 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); gsGo(0); return; }
     if (e.key === 'Escape') { S.gOpen = false; render(); return; }
   }
-  if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); }
+  if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); return; }
+  if (e.key === 'Escape' && S.drawer) closeDrawer();
 });
 
 window.addEventListener('hashchange', () => {
-  S.navOpen = false;
+  S.navOpen = false; if (S.drawer) { replayStop(false); S.drawer = null; }
   const prev = S.route;
   S.route = parseHash();
   if (prev.name === 'scenario' && prev.tab === 'call' && S.route.tab !== 'call') clearInterval(S.timer);
