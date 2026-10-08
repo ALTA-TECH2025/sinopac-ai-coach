@@ -3,12 +3,12 @@
 // 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
-import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.695466f';
+import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.b672a97';
 import { ROLES, ORG, UNITS, MEMBERS, DEMO_ACCOUNTS, memberById, visibleMemberIds,
-         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.695466f';
+         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.b672a97';
 
 const VERSION = 'v1.0.4';
-const BUILD = '20261008.695466f';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
+const BUILD = '20261008.b672a97';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
 const AT = [0, 22, 54, 82, 108, 132, 180, 208, 216, 248, 300, 336];
 
 /* ------------------------------------------------------------------ state */
@@ -1287,10 +1287,11 @@ function viewRecords(sc) {
         ? `<button class="pill-btn" data-act="rescore" data-arg="${r.id}" title="若 workflow 未成功觸發，點擊重新觸發評分"><span class="spin" style="width:11px;height:11px;border-width:2px"></span>正在評估中 · 重新觸發</button>`
         : `<span class="pill" style="color:#667085;background:#F4F7F8" title="${esc(r.failReason || '')}">暫無評分${r.failReason ? ' · 逾時' : ''}</span> <button class="btn-ghost sm" data-act="rescore" data-arg="${r.id}" title="${esc(r.failReason || '重新評分')}">↻ 重新評分</button>`;
     const mid = full
-      ? `<td>${esc(m.name || '—')}</td><td>${esc(UNITS[m.unit] || '—')}</td>`
+      ? `<td class="nowrap">${esc(m.name || '—')}</td><td class="nowrap">${esc(UNITS[m.unit] || '—')}</td>`
       : '';
+    const d10 = String(r.date).slice(0, 10), dt = String(r.date).slice(11, 16);
     return `<tr class="clickable" data-act="goto" data-arg="#/s/${sc.id}/report/${r.id}">
-      <td class="mono">${esc(r.date)}</td>
+      <td class="mono nowrap">${esc(d10)}${dt ? `<small class="dt">${esc(dt)}</small>` : ''}</td>
       <td><b>${esc(r.pe)}</b></td>
       <td><span class="pill" style="color:${d.col};background:${d.col}1f">${d.cn}</span></td>
       <td class="mono" style="color:var(--muted);font-size:12px">${esc(r.id)}</td>
@@ -1302,10 +1303,15 @@ function viewRecords(sc) {
 
   const target = targetFor(sc.id); const prAll = passRate(inR); const prMine = passRate(inR.filter(r => r.member === S.user.id));
   const avgR = (() => { const d = inR.filter(r => r.status === 'done'); return d.length ? (d.reduce((x, y) => x + y.score, 0) / d.length).toFixed(1) : '—'; })();
+  const doneR = inR.filter(r => r.status === 'done').length;
   const prStrip = `<div class="pr-strip">
-      <div><span class="l">區間場次</span><b>${inR.length}</b><span class="s">已評分 ${inR.filter(r => r.status === 'done').length}・平均 ${avgR}</span></div>
-      <div><span class="l">${full ? '可視範圍通過率' : '我的通過率'}</span><b style="color:${prCol(full ? prAll : prMine, target)}">${passRateText(full ? prAll : prMine)}</b><span class="s">${esc(passRateSub(full ? prAll : prMine, target))}</span></div>
-      ${full && prMine.n ? `<div><span class="l">我的通過率</span><b style="color:${prCol(prMine, target)}">${passRateText(prMine)}</b><span class="s">${esc(passRateSub(prMine, target))}</span></div>` : ''}
+      <div class="pr-tiles">
+        <div class="t"><span class="l">區間場次</span><b>${inR.length}</b><span class="s">${esc(rangeBounds().text)}</span></div>
+        <div class="t"><span class="l">已評分</span><b>${doneR}</b><span class="s">待評 ${inR.length - doneR}</span></div>
+        <div class="t"><span class="l">平均得分</span><b style="color:${avgR === '—' ? 'var(--muted)' : scoreCol(Number(avgR))}">${avgR}</b><span class="s">${doneR} 份評分</span></div>
+        <div class="t"><span class="l">${full ? '可視範圍通過率' : '我的通過率'}</span><b style="color:${prCol(full ? prAll : prMine, target)}">${passRateText(full ? prAll : prMine)}</b><span class="s">${esc(passRateSub(full ? prAll : prMine, target))}</span></div>
+        ${full && prMine.n ? `<div class="t"><span class="l">我的通過率</span><b style="color:${prCol(prMine, target)}">${passRateText(prMine)}</b><span class="s">${esc(passRateSub(prMine, target))}</span></div>` : ''}
+      </div>
       <div class="hint">通過率 = 通過次數 ÷ 全部對練次數；單場判定：${(() => { const ev = ensureEval(sc.id); return ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'; })()}${ensureEval(sc.id).veto ? '，法遵一票否決' : ''}。目標可在參數設定調整。</div>
     </div>`;
   return `<div class="wrap">
@@ -1467,7 +1473,7 @@ function viewReport(sc, sessionId) {
   const shownCount = session.reveal || rl.length;
   const lines = rl.slice(0, shownCount).map((l, i) => `<div class="replay-line ${i === actIdx ? 'on' : ''}" data-act="replayseek" data-arg="${l.at}">
       <span class="t mono">${fmt(l.at)}</span>
-      <span class="sp" style="color:${l.who === 'cust' ? 'var(--ink2)' : 'var(--blue)'}">${l.who === 'cust' ? esc(session.pe.split('·').pop().trim()) : esc(m.name)}</span>
+      <span class="sp" style="color:${l.who === 'cust' ? 'var(--ink2)' : 'var(--blue)'}">${l.who === 'cust' ? esc(session.pe.split('·').pop().trim().split(' ').pop()) : esc(m.name)}</span>
       <span class="tx">${esc(l.text)}</span>${l.who === 'cust' ? '' : `<span class="who-tag">你</span>`}</div>`).join('');
   const voiceOk = 'speechSynthesis' in window;
   const replayCtl = `<div class="replay-ctl">
@@ -1539,6 +1545,9 @@ function viewScenarioStats(sc) {
   const avg = done.length ? (done.reduce((a, b) => a + b.score, 0) / done.length) : 0;
   const rb = rangeBounds();
 
+  const byDiff = {}; rows.forEach(r => { byDiff[r.diff] = (byDiff[r.diff] || 0) + 1; });
+  const diffBars = Object.keys(DIFF).filter(k => byDiff[k]).map(k => `<div class="bar-row"><div class="lb"><span><i class="dot" style="background:${DIFF[k].col}"></i>${esc(DIFF[k].cn)}</span><span>${byDiff[k]}</span></div>
+     <div class="bar-track"><div class="bar-fill" style="width:${byDiff[k] / Math.max(1, rows.length) * 100}%;background:${DIFF[k].col}"></div></div></div>`).join('');
   const byPersona = {};
   rows.forEach(r => { byPersona[r.pe] = (byPersona[r.pe] || 0) + 1; });
   const maxP = Math.max(1, ...Object.values(byPersona));
@@ -1562,8 +1571,7 @@ function viewScenarioStats(sc) {
 
   return `<div class="wrap">
     <div class="page-h"><h1>對練統計 <span class="tag-mgr">主管模組</span></h1><p>${esc(sc.desc)}</p></div>
-    <div class="scope-note">${esc(scopeLabel(S.user))}</div>
-    ${viewRangeBar()}
+    ${viewRangeBar(scopeLabel(S.user))}
     <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
       ${kpi('練', '對練場次', rows.length, rb.text, '#D81E26')}
       ${kpi('完', '已完成', done.length, `待評 ${rows.length - done.length}`, '#1E9E63')}
@@ -1572,7 +1580,7 @@ function viewScenarioStats(sc) {
       ${kpi('人', '參與人數', new Set(rows.map(r => r.member)).size, '有對練記錄', '#2D6CC0')}
     </div>
     <div class="grid2 dash-row" style="margin-bottom:18px">
-      <div class="card"><div class="card-h"><h2>客戶畫像分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${personaBars || '<div class="empty">尚無資料</div>'}</div></div>
+      <div class="card"><div class="card-h"><h2>客戶畫像與難度分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${personaBars || '<div class="empty">尚無資料</div>'}${diffBars ? `<div class="sub-h">難度</div>${diffBars}` : ''}</div></div>
       <div class="card"><div class="card-h"><h2>理專分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${memberBars || '<div class="empty">尚無資料</div>'}</div></div>
     </div>
     <div class="card"><div class="card-h"><h2>最近對練</h2><div class="sub">${esc(rb.text)} 內的對練場次</div></div>
@@ -1712,13 +1720,12 @@ function viewInsights() {
       <td><b>${esc(x.m.name)}</b>${x.m.id === S.user.id ? ' <span class="pill" style="color:var(--red);background:var(--red-soft)">我</span>' : ''}</td>
       <td>${esc(UNITS[x.m.unit])}</td><td>${esc(ROLES[x.m.role].cn)}</td>
       <td class="mono">${x.n}</td>
-      <td class="num"><b class="mono" style="color:${prCol(x.pr, TARGETS.passRate)}">${passRateText(x.pr)}</b></td>
-      <td class="num"><b class="mono" style="color:${scoreCol(x.s)}">${x.s ? x.s.toFixed(1) : '—'}</b></td></tr>`).join('');
+      <td class="num"><b class="mono" style="color:${x.pr.pct == null ? 'var(--faint)' : prCol(x.pr, TARGETS.passRate)}">${passRateText(x.pr)}</b></td>
+      <td class="num"><b class="mono" style="color:${x.s ? scoreCol(x.s) : 'var(--faint)'}">${x.s ? x.s.toFixed(1) : '—'}</b></td></tr>`).join('');
 
   return `<div class="wrap">
     <div class="page-h"><h1>洞察分析 <span class="tag-mgr">主管模組</span></h1><p>跨場景的團隊表現：依組織層級彙總。</p></div>
-    <div class="scope-note">${esc(scopeLabel(S.user))}</div>
-    ${viewRangeBar()}
+    ${viewRangeBar(scopeLabel(S.user))}
     <div class="kpis" style="grid-template-columns:repeat(5,1fr)">
       ${kpi('均', '平均得分', avg ? avg.toFixed(1) : '—', `${done.length} 場已評分`, '#D81E26')}
       ${(() => { const pr = passRate(rows); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, TARGETS.passRate), prCol(pr, TARGETS.passRate)); })()}
