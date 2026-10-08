@@ -3,12 +3,12 @@
 // 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
-import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261007.911a2a5';
+import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.695466f';
 import { ROLES, ORG, UNITS, MEMBERS, DEMO_ACCOUNTS, memberById, visibleMemberIds,
-         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261007.911a2a5';
+         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.695466f';
 
 const VERSION = 'v1.0.4';
-const BUILD = '20261007.911a2a5';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
+const BUILD = '20261008.695466f';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
 const AT = [0, 22, 54, 82, 108, 132, 180, 208, 216, 248, 300, 336];
 
 /* ------------------------------------------------------------------ state */
@@ -1571,7 +1571,7 @@ function viewScenarioStats(sc) {
       ${(() => { const pr = passRate(rows); const t = targetFor(sc.id); return kpi('過', '通過率', passRateText(pr), passRateSub(pr, t), prCol(pr, t)); })()}
       ${kpi('人', '參與人數', new Set(rows.map(r => r.member)).size, '有對練記錄', '#2D6CC0')}
     </div>
-    <div class="grid2" style="margin-bottom:18px;align-items:start">
+    <div class="grid2 dash-row" style="margin-bottom:18px">
       <div class="card"><div class="card-h"><h2>客戶畫像分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${personaBars || '<div class="empty">尚無資料</div>'}</div></div>
       <div class="card"><div class="card-h"><h2>理專分布</h2><div class="sub">共 ${rows.length} 筆</div></div><div class="card-b">${memberBars || '<div class="empty">尚無資料</div>'}</div></div>
     </div>
@@ -1600,15 +1600,16 @@ function viewMe() {
     return `<tr class="clickable" data-act="goto" data-arg="#/s/${s.id}/records"><td><b>${esc(s.cn)}</b></td><td style="font-size:12px;color:var(--body)">${ev.pass === 'score' ? `分數 ≥ ${ev.passScore}` : '達成成交訊號'}${ev.veto ? '・法遵否決' : ''}</td><td class="num mono">${pr.n}</td><td class="num mono">${pr.k}</td><td class="num"><b class="mono" style="color:${prCol(pr, t)}">${passRateText(pr)}</b></td><td class="num mono">${t}%</td><td>${pr.pct == null ? '—' : pr.pct >= t ? '<span class="pill good">已達標</span>' : `<span class="pill bad">差 ${t - pr.pct}%</span>`}</td></tr>`;
   }).join('');
 
-  const W = 620, H = 200, padX = 22, padTop = 16, padBot = 30, n = trend.length;
-  const xs = i => n === 1 ? W / 2 : padX + i * ((W - 2 * padX) / (n - 1));
+  const W = 760, H = 250, padL = 40, padR = 20, padTop = 20, padBot = 34, n = trend.length;
+  const xs = i => n === 1 ? (padL + (W - padL - padR) / 2) : padL + i * ((W - padL - padR) / (n - 1));
   const ys = v => padTop + (1 - (Math.max(50, Math.min(100, v)) - 50) / 50) * (H - padTop - padBot);
+  const grid = [60, 70, 80, 90, 100].map(v => `<line x1="${padL}" y1="${ys(v).toFixed(1)}" x2="${W - padR}" y2="${ys(v).toFixed(1)}" stroke="#EDF1F2"/><text x="${padL - 8}" y="${(ys(v) + 3.5).toFixed(1)}" fill="#A3AEB5" font-size="10" text-anchor="end">${v}</text>`).join('');
   const pts = trend.map((t, i) => [xs(i), ys(t.v)]);
   const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
   const area = n > 1 ? `M${pts[0][0].toFixed(1)},${H - padBot} ` + pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') + ` L${pts[n - 1][0].toFixed(1)},${H - padBot} Z` : '';
   const dots = trend.map((t, i) => `<circle cx="${xs(i).toFixed(1)}" cy="${ys(t.v).toFixed(1)}" r="3.6" fill="#fff" stroke="#D81E26" stroke-width="2"/>
     <text x="${xs(i).toFixed(1)}" y="${ys(t.v) - 9}" fill="#D81E26" font-size="10" font-weight="700" text-anchor="middle">${t.v}</text>
-    ${n <= 12 || i % Math.ceil(n / 12) === 0 ? `<text x="${xs(i).toFixed(1)}" y="${H - padBot + 16}" fill="#7C8992" font-size="10" text-anchor="middle">${esc(t.l)}</text>` : ''}`).join('');
+    ${n <= 12 || i % Math.ceil(n / 12) === 0 ? `<text x="${xs(i).toFixed(1)}" y="${H - padBot + 18}" fill="#7C8992" font-size="10.5" text-anchor="middle">${esc(t.l)}</text>` : ''}`).join('');
 
   const cx = 160, cy = 115, R = 82, dn = OVERALL_DIMS.length;
   const ang = i => (-90 + i * (360 / dn)) * Math.PI / 180;
@@ -1625,10 +1626,10 @@ function viewMe() {
   const dist = distList.map(d => `<div class="bar-row"><div class="lb"><span>${esc(d.cn)}</span><span>${d.n} 次</span></div>
     <div class="bar-track"><div class="bar-fill" style="width:${(d.n / distMax * 100).toFixed(0)}%;background:linear-gradient(90deg,${d.col}99,${d.col})"></div></div></div>`).join('') || '<div class="empty">此區間沒有對練</div>';
 
-  const recent = mine.slice(0, 6).map(r => {
+  const recent = mine.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 6).map(r => {
     const sc = scenarioById(r.sc) || {};
     return `<tr class="clickable" data-act="goto" data-arg="#/s/${r.sc}/report/${r.id}">
-      <td><b>${esc(sc.cn || r.sc)}</b></td><td>${esc(r.pe)}</td><td class="mono">${esc(r.date)}</td>
+      <td><b>${esc(sc.cn || r.sc)}</b></td><td>${esc(r.pe)}</td><td class="mono">${esc(String(r.date).slice(0, 10))}</td>
       <td class="num">${r.status === 'done' ? `<b class="mono" style="color:${scoreCol(r.score)}">${r.score}</b>` : '—'}</td></tr>`;
   }).join('');
 
@@ -1643,26 +1644,26 @@ function viewMe() {
     </div>
     <div class="card" style="margin-bottom:18px"><div class="card-h"><h2>各場景通過率</h2><div class="sub">${esc(rb.text)}・通過次數 ÷ 全部對練次數・目標依場景設定</div></div>
       <table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>單場通關判定</th><th class="num">對練次數</th><th class="num">通過</th><th class="num">通過率</th><th class="num">目標</th><th>狀態</th></tr></thead><tbody>${scPassRows || '<tr><td colspan="7" class="empty">尚無對練記錄</td></tr>'}</tbody></table></div>
-    <div class="grid-me" style="display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:18px;align-items:start">
+    <div class="grid-me dash-row">
       <div class="card"><div class="card-h"><h2>得分趨勢</h2><div class="sub">${esc(rb.text)}・${n > 1 ? '各期平均分' : '單場分數'}</div></div>
-        <div class="card-b">${n ? '' : '<div class="empty">此區間沒有已評分的對練</div>'}<svg viewBox="0 0 620 200" style="width:100%;height:auto;${n ? '' : 'display:none'}">
+        <div class="chart-body">${n ? '' : '<div class="empty">此區間沒有已評分的對練</div>'}<svg class="chart trend" viewBox="0 0 ${W} ${H}" style="${n ? '' : 'display:none'}">
           <defs><linearGradient id="tf" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#D81E26" stop-opacity=".22"/><stop offset="100%" stop-color="#D81E26" stop-opacity="0"/></linearGradient></defs>
-          <line x1="22" y1="44" x2="598" y2="44" stroke="#EDF1F2"/><line x1="22" y1="92" x2="598" y2="92" stroke="#EDF1F2"/><line x1="22" y1="140" x2="598" y2="140" stroke="#EDF1F2"/>
+          ${grid}
           <path d="${area}" fill="url(#tf)"/>
           <polyline points="${line}" fill="none" stroke="#D81E26" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
           ${dots}
         </svg></div></div>
       <div class="card"><div class="card-h"><h2>能力雷達</h2><div class="sub">COMPETENCY RADAR</div></div>
-        <div class="card-b"><svg viewBox="0 0 320 250" style="width:100%;height:auto">
+        <div class="chart-body"><svg class="chart radar" viewBox="0 0 320 250">
           ${rings}${axes}<polygon points="${poly}" fill="rgba(0,158,150,.2)" stroke="#009E96" stroke-width="2"/>
         </svg></div></div>
     </div>
-    <div class="grid2" style="align-items:start">
-      <div class="card"><div class="card-h"><h2>場景練習分布</h2><div class="sub">${esc(rb.text)}</div></div><div class="card-b">${dist}</div></div>
+    <div class="grid-me dash-row">
       <div class="card"><div class="card-h"><h2>我的最近對練</h2><div class="sub">${esc(rb.text)}</div></div>
         ${mine.length ? `<table class="tbl" style="margin-top:12px"><thead><tr><th>場景</th><th>客戶畫像</th><th>日期</th><th class="num">得分</th></tr></thead><tbody>${recent}</tbody></table>`
                       : `<div class="empty">${allMine.length ? '此區間沒有對練記錄，試試切換區間。' : '你還沒有對練記錄。'}</div>`}</div>
+      <div class="card"><div class="card-h"><h2>場景練習分布</h2><div class="sub">${esc(rb.text)}</div></div><div class="card-b">${dist}</div></div>
     </div>
   </div>`;
 }
@@ -1725,7 +1726,7 @@ function viewInsights() {
       ${kpi('人', '覆蓋人數', new Set(rows.map(r => r.member)).size, `可視成員 ${people.length} 人`, '#009E96')}
       ${kpi('景', '涵蓋場景', new Set(rows.map(r => r.sc)).size, `共 ${SCENARIOS.length} 個場景`, '#6A5BC4')}
     </div>
-    <div class="grid2" style="margin-bottom:18px;align-items:start">
+    <div class="grid2 dash-row" style="margin-bottom:18px">
       <div class="card"><div class="card-h"><h2>單位對比</h2><div class="sub">依平均得分排序</div></div><div class="card-b">${unitRows || '<div class="empty">尚無資料</div>'}</div></div>
       <div class="card"><div class="card-h"><h2>得分分級分布</h2><div class="sub">共 ${done.length} 場已評分</div></div><div class="card-b">${distRows}</div></div>
     </div>
