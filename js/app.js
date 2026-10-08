@@ -3,12 +3,12 @@
 // 對練畫面沿用永豐 v1.0.3 原型；示範場景改為信貸電銷（複訪／議價）與客服話務（銀行／信用卡），複盤維度依應用的評分 schema。
 'use strict';
 
-import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.b672a97';
+import { SCENARIOS, TRANSCRIPTS, REPORT_CONTENT, OVERALL_DIMS, ANALYTICS } from './data.js?v=20261008.e50fbe2';
 import { ROLES, ORG, UNITS, MEMBERS, DEMO_ACCOUNTS, memberById, visibleMemberIds,
-         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.b672a97';
+         scopeLabel, CAN, AUDIT, SCENARIO_META, SESSIONS } from './org.js?v=20261008.e50fbe2';
 
 const VERSION = 'v1.0.4';
-const BUILD = '20261008.b672a97';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
+const BUILD = '20261008.e50fbe2';   // 每次發佈更新，側欄顯示，用來確認瀏覽器載到的是哪一版
 const AT = [0, 22, 54, 82, 108, 132, 180, 208, 216, 248, 300, 336];
 
 /* ------------------------------------------------------------------ state */
@@ -20,7 +20,8 @@ const S = {
   personaId: null, difficulty: 'L2',
   reveal: 0, elapsed: 0, confirmEnd: false, timer: null, callPhase: 'ready',   // 對練中：ready 未開始 / live 通話中 / ended 已結束
   recSearch: '', statGran: '月', settingsTab: 'list', memberTab: 'members',
-  range: { gran: '月', anchor: '', from: '', to: '' },   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
+  range: { gran: '月', anchor: '', from: '', to: '' },
+  gq: '', gOpen: false,   // 頂欄全域搜尋   // 統計時間區間：日／週／月／季／年／自選／全部，四個報表頁共用
   liveSession: null,
   editScenario: null,   // 場景設定「編輯」中的草稿 { id, draft }
   dlg: null,            // 成員權限頁的對話框 { kind: member|csv|api|org, draft, error, result }
@@ -272,6 +273,45 @@ function viewSidebar() {
   </aside>`;
 }
 
+/* 全域搜尋：場景、客戶畫像、對練記錄（依權限範圍）、成員與設定頁 */
+function globalSearchResults(q) {
+  const k = q.trim().toLowerCase(); if (!k) return [];
+  const hit = (...xs) => xs.some(x => String(x || '').toLowerCase().includes(k));
+  const groups = [];
+  const scs = SCENARIOS.filter(s => SCENARIO_META[s.id].status === 'on' && hit(s.cn, s.en, s.desc, s.catCn)).slice(0, 5)
+    .map(s => ({ label: s.cn, sub: `${s.catCn.split(' · ')[0]} · ${s.personas.length} 個客戶畫像`, hash: `#/s/${s.id}/records`, ic: I.doc }));
+  if (scs.length) groups.push({ title: '場景', items: scs });
+  const ps = []; SCENARIOS.filter(s => SCENARIO_META[s.id].status === 'on').forEach(s => s.personas.forEach(p => { if (hit(p.name, p.risk, p.mood)) ps.push({ label: p.name, sub: `${s.cn} · ${DIFF[p.diff] ? DIFF[p.diff].cn : p.diff}`, hash: `#/s/${s.id}/new`, ic: I.user || I.doc, col: p.col }); }));
+  if (ps.length) groups.push({ title: '客戶畫像', items: ps.slice(0, 5) });
+  const ss = visibleSessions().filter(r => hit(r.id, r.pe, (memberById(r.member) || {}).name, (scenarioById(r.sc) || {}).cn)).slice(0, 6)
+    .map(r => ({ label: `${(scenarioById(r.sc) || {}).cn || r.sc} · ${r.pe}`, sub: `${String(r.date).slice(0, 10)} · ${(memberById(r.member) || {}).name || ''} · ${r.status === 'done' ? r.score + ' 分' : r.status === 'evaluating' ? '評分中' : '暫無評分'}`, hash: `#/s/${r.sc}/report/${r.id}`, ic: I.clock || I.doc, mono: r.id }));
+  if (ss.length) groups.push({ title: '對練記錄', items: ss });
+  if (CAN.settings(S.user)) {
+    const ms = MEMBERS.filter(m => hit(m.name, m.email, ROLES[m.role] && ROLES[m.role].cn, UNITS[m.unit])).slice(0, 5)
+      .map(m => ({ label: m.name, sub: `${ROLES[m.role] ? ROLES[m.role].cn : m.role} · ${UNITS[m.unit] || ''}`, hash: '#/sys/members', ic: I.user || I.doc, col: m.col, after: () => { S.memberTab = 'members'; S.memberSearch = m.name; } }));
+    if (ms.length) groups.push({ title: '成員', items: ms });
+  }
+  const pages = [
+    { label: '場景中心', hash: '#/hub', keys: '場景中心 hub' }, { label: '我的數據', hash: '#/me', keys: '我的數據 通過率 me' },
+    ...(CAN.stats(S.user) ? [{ label: '洞察分析', hash: '#/insights', keys: '洞察分析 團隊 排行 insights' }] : []),
+    ...(CAN.scenarioSettings(S.user) ? [{ label: '場景設定', hash: '#/sys/scenarios', keys: '場景設定 agent 配置' }, { label: '參數設定', hash: '#/sys/params', keys: '參數設定 難度 類型 評分規則 通過率目標' }] : []),
+    ...(CAN.settings(S.user) ? [{ label: '成員權限', hash: '#/sys/members', keys: '成員權限 角色 組織 agent 對應' }, { label: '操作記錄', hash: '#/sys/audit', keys: '操作記錄 稽核 audit' }] : []),
+  ].filter(pg => hit(pg.label, pg.keys)).map(pg => ({ label: pg.label, sub: '前往頁面', hash: pg.hash, ic: I.hub }));
+  if (pages.length) groups.push({ title: '頁面', items: pages });
+  return groups;
+}
+function viewSearchDrop() {
+  const groups = globalSearchResults(S.gq); let idx = 0;
+  if (!groups.length) return `<div class="gs-drop"><div class="gs-empty">找不到符合「${esc(S.gq.trim())}」的場景、客戶畫像、對練記錄或頁面</div></div>`;
+  return `<div class="gs-drop">${groups.map(g => `<div class="gs-group"><div class="gs-title">${esc(g.title)}</div>${g.items.map(it => { const i = idx++; return `<button class="gs-item ${i === 0 ? 'first' : ''}" data-act="gsgo" data-arg="${i}">
+      <span class="gs-ic" style="${it.col ? `background:${it.col};color:#fff` : ''}">${it.col ? esc(it.label.split('·').pop().trim()[0] || '') : svg(it.ic || I.doc, 14)}</span>
+      <span class="gs-main"><span class="gs-label">${esc(it.label)}</span><span class="gs-sub">${esc(it.sub)}</span></span>${it.mono ? `<span class="gs-mono mono">${esc(it.mono.slice(0, 8))}</span>` : ''}</button>`; }).join('')}</div>`).join('')}
+    <div class="gs-foot">Enter 開啟第一筆 · Esc 關閉</div></div>`;
+}
+function gsGo(i) {
+  const flat = globalSearchResults(S.gq).flatMap(g => g.items); const it = flat[Number(i) || 0]; if (!it) return;
+  S.gOpen = false; S.gq = ''; if (it.after) it.after(); go(it.hash); render();
+}
 function viewTopbar() {
   const u = S.user;
   return `<div class="topbar">
@@ -280,10 +320,11 @@ function viewTopbar() {
     <button class="org-pick" data-act="noop">
       <span>永豐商業銀行</span><span class="sep">/</span><span>${esc(UNITS[u.unit] || '總行')}</span>${svg(I.chev, 15)}
     </button>
-    <div class="search">
+    <div class="search ${S.gOpen && S.gq.trim() ? 'open' : ''}">
       ${svg(I.search, 15)}
-      <input placeholder="搜尋場景、客戶畫像、對練場次" data-act="globalsearch" value="${esc(S.hubSearch)}">
-      <kbd>⌘K</kbd>
+      <input placeholder="搜尋場景、客戶畫像、對練場次、成員…" data-act="globalsearch" data-keep-focus="globalsearch" value="${esc(S.gq)}" autocomplete="off">
+      ${S.gq ? `<button class="gs-clear" data-act="gsclear" aria-label="清除">×</button>` : '<kbd>⌘K</kbd>'}
+      ${S.gOpen && S.gq.trim() ? viewSearchDrop() : ''}
     </div>
     <div class="top-right">
       <button class="icon-btn" data-act="noop" title="語言">${svg(I.globe, 18)}</button>
@@ -2172,6 +2213,7 @@ const ACTIONS = {
   pickdiff: k => { S.difficulty = k; render(); },
   startcall: () => startCall(),
   navtoggle: () => { S.navOpen = !S.navOpen; render(); }, navclose: () => { S.navOpen = false; render(); },
+  gsgo: i => gsGo(i), gsclear: () => { S.gq = ''; S.gOpen = false; render(); const el = document.querySelector('[data-keep-focus="globalsearch"]'); if (el) el.focus(); },
   rangegran: g => { setRangeGran(g); render(); }, rangeprev: () => { rangeShift(-1); render(); }, rangenext: () => { rangeShift(1); render(); }, rangetoday: () => { S.range.anchor = dKey(new Date()); render(); },
   askend: () => { S.confirmEnd = true; render(); },
   iframecall: () => iframeCallStart(), iframehang: () => iframeCallEnd(),
@@ -2231,6 +2273,8 @@ const ACTIONS = {
 };
 
 document.addEventListener('click', e => {
+  if (S.gOpen && !e.target.closest('.search')) { S.gOpen = false; render(); }
+  else if (e.target.closest('.search input')) { if (S.gq.trim() && !S.gOpen) { S.gOpen = true; render(); } }
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act;
@@ -2273,7 +2317,8 @@ document.addEventListener('input', e => {
   }
   const el = e.target.closest('[data-act]');
   if (!el) return;
-  if (el.dataset.act === 'hubsearch' || el.dataset.act === 'globalsearch') { S.hubSearch = el.value; render(); }
+  if (el.dataset.act === 'hubsearch') { S.hubSearch = el.value; render(); }
+  else if (el.dataset.act === 'globalsearch') { S.gq = el.value; S.gOpen = true; render(); }
   else if (el.dataset.act === 'recsearch') { S.recSearch = el.value; render(); }
   else if (el.dataset.act === 'memsearch') { S.memberSearch = el.value; render(); }
   else if (el.dataset.act === 'auditsearch') { S.auditFilter.q = el.value; render(); }
@@ -2291,7 +2336,14 @@ document.addEventListener('change', e => {
   if (file && file.files && file.files[0] && S.dlg) { const fr = new FileReader(); fr.onload = () => { S.dlg.draft.text = String(fr.result || ''); if (file.dataset.file === 'orgcsv') orgCsvParse(); else csvParse(); }; fr.readAsText(file.files[0], 'utf-8'); return; }
   const f = e.target.closest('[data-field]'); if (f) e.target.dispatchEvent(new Event('input', { bubbles: true }));
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); } });
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { const el = document.querySelector('[data-keep-focus="globalsearch"]'); if (el) { e.preventDefault(); el.focus(); el.select(); if (S.gq.trim()) { S.gOpen = true; render(); } } return; }
+  if (e.target && e.target.dataset && e.target.dataset.keepFocus === 'globalsearch') {
+    if (e.key === 'Enter') { e.preventDefault(); gsGo(0); return; }
+    if (e.key === 'Escape') { S.gOpen = false; render(); return; }
+  }
+  if (e.key === 'Escape' && (S.editScenario || S.dlg)) { S.editScenario = null; S.dlg = null; render(); }
+});
 
 window.addEventListener('hashchange', () => {
   S.navOpen = false;
